@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Politie Assistent - Melding Maken</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="chat-header">
+            <div class="logo-area">
+                <i class="fa-solid fa-shield-halved"></i>
+                <div class="header-text">
+                    <h1>Politie Assistent</h1>
+                    <span class="status">Online</span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button id="info-btn" title="Informatie"><i class="fa-solid fa-circle-info"></i></button>
+            </div>
+        </header>
+
+        <main class="chat-window" id="chat-window">
+            <div class="message bot-message">
+                <div class="avatar"><i class="fa-solid fa-user-police"></i></div>
+                <div class="message-content">
+                    <p>Goedendag. Ik ben de digitale assistent van de politie. Ik kan u helpen bij het opstellen van een melding of het beantwoorden van vragen.</p>
+                    <p>Waarmee kan ik u vandaag helpen?</p>
+                </div>
+                <div class="timestamp">Nu</div>
+            </div>
+            <!-- Messages will be added here dynamically -->
+        </main>
+
+        <footer class="chat-input-area">
+            <form id="chat-form">
+                <button type="button" id="voice-btn" class="icon-btn" title="Spraak invoer"><i class="fa-solid fa-microphone"></i></button>
+                <input type="text" id="user-input" placeholder="Typ uw bericht hier..." autocomplete="off">
+                <button type="submit" id="send-btn" class="send-btn"><i class="fa-solid fa-paper-plane"></i></button>
+            </form>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
