@@ -1,0 +1,143 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  font-family: Segoe UI, Arial, sans-serif;
+  background: #f4f6f8;
+  margin: 0;
+  padding: 20px;
+  color: #222;
+}
+.admin-container {
+  max-width: 1100px;
+  margin: 0 auto;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #eee;
+}
+header h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+.controls {
+  display: flex;
+  display: flex; gap: 8px; 
+/* Priority badges */
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: #fff;
+}
+.badge.hoog {
+  background: #c0392b;
+}
+.badge.midden {
+  background: #f39c12;
+}
+.badge.laag {
+  background: #2980b9;
+}
+
+/* Header smaller controls */
+.controls select,
+.controls input[type="text"],
+.controls input[type="password"] {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+}
+.controls select {
+  background: #fff;
+}
+.controls button {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 0;
+  background: #2d6cdf;
+  color: #fff;
+  cursor: pointer;
+}
+.btn.small {
+  padding: 6px 8px;
+  font-size: 0.9rem;
+}
+
+/* Make detail area nicely spaced */
+.detail .section-title {
+  font-weight: 700;
+  margin-top: 8px;
+}
+.detail textarea {
+  font-family: monospace;
+  gap: 8px;
+}
+.controls input {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+}
+main {
+  display: flex;
+  gap: 20px;
+  padding: 20px;
+}
+.list {
+  flex: 1;
+}
+.detail {
+  flex: 1;
+  border-left: 1px solid #f0f0f0;
+  padding-left: 20px;
+}
+.detail textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 8px;
+}
+.btn {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 0;
+  background: #003399;
+  color: #fff;
+  cursor: pointer;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th,
+td {
+  padding: 8px;
+  text-align: left;
+  border-bottom: 1px solid #f3f3f3;
+}
+tr:hover {
+  background: #fafafa;
+}
+.pagination {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Modal styles */
+.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:1200}
+.modal[aria-hidden="false"]{display:flex}
+.modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,0.45)}
+.modal-card{position:relative;background:#fff;border-radius:10px;max-width:900px;width:95%;max-height:86vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,0.25);padding:0}
+.modal-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #eee}
+.modal-body{padding:14px}
+.modal-footer{display:flex;gap:8px;justify-content:flex-end;padding:12px;border-top:1px solid #eee}
+.modal-body textarea{width:100%;min-height:120px}

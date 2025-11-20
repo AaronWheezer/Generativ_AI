@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="nl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Admin - Dossiers</title>
+    <link rel="stylesheet" href="admin.css" />
+  </head>
+  <body>
+    <div class="admin-container">
+      <header>
+        <h1>Politie - Dossiers (Admin)</h1>
+        <div class="controls">
+          <input
+            id="backend-url"
+            placeholder="Backend URL (default http://localhost:3000)"
+            type="text"
+          />
+          <select id="sort-select" title="Sorteer op">
+            <option value="id">Sorteer: nieuwste</option>
+            <option value="prioriteit">Sorteer: prioriteit</option>
+            <option value="datum">Sorteer: datum</option>
+          </select>
+          <input id="token-input" placeholder="Admin token" type="password" />
+          <button id="load-btn">Laad</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="list">
+          <h2>Laatste dossiers</h2>
+          <table id="dossier-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Datum</th>
+                <th>Prioriteit</th>
+                <th>Status</th>
+                <th>Beschrijving (excerpt)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="pagination">
+            <button id="prev">Vorige</button>
+            <span id="page-info"></span>
+            <button id="next">Volgende</button>
+          </div>
+        </section>
+
+        <section class="detail">
+          <h2>Detail</h2>
+          <div id="detail-area">
+            Selecteer een dossier om te zien en bewerken.
+          </div>
+        </section>
+        <!-- Modal for case detail -->
+        <div id="case-modal" class="modal" aria-hidden="true">
+          <div class="modal-backdrop"></div>
+          <div class="modal-card">
+            <header class="modal-header">
+              <h3>Dossier <span id="modal-id"></span></h3>
+              <button id="modal-close" class="btn small">Sluit</button>
+            </header>
+            <main class="modal-body" id="modal-body">
+              <!-- populated dynamically -->
+            </main>
+            <footer class="modal-footer">
+              <button id="modal-bezig" class="btn">Bezig</button>
+              <button id="modal-klaar" class="btn" style="background: #27ae60">
+                Klaar
+              </button>
+              <button id="modal-delete" class="btn" style="background: #c0392b">
+                Verwijder
+              </button>
+            </footer>
+          </div>
+        </div>
+      </main>
+    </div>
+    <script src="admin.js"></script>
+  </body>
+</html>
