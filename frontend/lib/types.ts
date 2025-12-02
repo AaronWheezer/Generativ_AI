@@ -9,6 +9,8 @@ export interface PVRecord {
   zoneLabel: string
   email: string
   phone: string
+  prioriteit: string
+  status: string
   confirmed: boolean
   createdAt: Date
 }
