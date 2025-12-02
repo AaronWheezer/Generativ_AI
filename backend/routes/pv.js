@@ -6,7 +6,7 @@ const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const CHAT_MODEL = process.env.CHAT_MODEL || "llama3.1";
 const EMBED_MODEL = process.env.EMBED_MODEL || "nomic-embed-text";
 
-// --- VASTE VRAGEN LIJST (Correct Nederlands) ---
+// --- VASTE VRAGEN LIJST ---
 const QUESTIONS = {
     name: "Met wie spreek ik? (Uw volledige naam)",
     description: "Kunt u in het kort vertellen wat er is gebeurd?",
@@ -18,7 +18,10 @@ const QUESTIONS = {
     
     location: "Waar heeft dit incident precies plaatsgevonden? (Straat en gemeente)",
     municipality_fix: "Ik kan de politiezone niet automatisch bepalen. Kunt u de hoofdgemeente noemen?",
-    datetime: "Op welke datum en welk tijdstip is dit gebeurd?",
+    
+    // Aangepaste vraag voor datum/tijd
+    datetime: "Wanneer is dit gebeurd? (Ik heb zowel de datum als het tijdstip nodig, bv. 'Gisteren om 14:30')",
+    time_only: "Kunt u ook het specifieke tijdstip noemen? (bv. 'rond 15:00' of 'middernacht')",
     
     email: "Wat is uw e-mailadres voor de bevestiging?",
     phone: "Op welk telefoonnummer kunnen we u bereiken?"
@@ -62,7 +65,6 @@ async function findPoliceZone(db, input) {
   return new Promise((resolve) => {
     db.all("SELECT id, municipalities, zone_name, arrondissement, embedding FROM police_zones", [], async (err, rows) => {
         if (err || !rows) return resolve(null);
-        
         for (const term of searchTerms) {
             const target = normalize(term);
             for (const r of rows) {
@@ -73,7 +75,6 @@ async function findPoliceZone(db, input) {
                 }
             }
         }
-
         let best = null;
         const qEmb = await embed(input);
         for (const r of rows) {
@@ -96,26 +97,37 @@ async function sendPVEmail(dossier) {
 
 // --- AI AGENT LOGICA ---
 
-// Stap 1: Extractie (Blijft AI - dit is het 'brein')
+// Stap 1: Extractie (Gesplitst in Date en Time)
 async function extractInformation(userMessage) {
+  const now = new Date();
+  const currentDate = now.toLocaleDateString('nl-BE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const currentTime = now.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
+
   const prompt = `
     You are a Data Extractor.
-    Analyze ONLY this new message: "${userMessage}"
     
-    Task: Extract data into JSON.
+    CONTEXT:
+    - Current Date: ${currentDate}
+    - Current Time: ${currentTime}
+    - User Message: "${userMessage}"
+    
+    TASK: Extract data into JSON. Split date and time.
+    
     Fields:
     - name (Full Name)
-    - description (New details about the incident)
-    - location (Specific place, address, city)
-    - municipality (Only if explicitly named e.g. "Kortrijk")
-    - datetime (Time. Convert "9u avond" to "21:00". Only if stated.)
+    - description (Details of incident)
+    - location (Place/City)
+    - municipality (Only if explicitly named)
+    - date (The date of the incident in "YYYY-MM-DD" format. Resolve relative terms like "yesterday".)
+    - time (The specific time in "HH:MM" format. IF NOT MENTIONED, RETURN NULL/EMPTY. DO NOT GUESS 00:00.)
     - email (Email address)
     - phone (Phone number)
     - suspectKnown (boolean)
 
     Rules:
     1. Extract ONLY what is in the message.
-    2. Output JSON ONLY.
+    2. If the user only says "Yesterday", set date="2025-XX-XX" and time=null.
+    3. Output JSON ONLY.
   `;
 
   try {
@@ -135,10 +147,8 @@ async function extractInformation(userMessage) {
   }
 }
 
-// Stap 2: Reasoning (NU ZONDER AI VOOR DE VRAGEN)
-// Dit garandeert correct Nederlands en logische volgorde.
+// Stap 2: Reasoning (Vaste Vragen)
 function determineNextAction(fields, sessionState) {
-  
   let nextStep = null;
 
   // 1. Wie?
@@ -149,7 +159,6 @@ function determineNextAction(fields, sessionState) {
       nextStep = "description";
   }
   else if (sessionState.detailStep < 3) {
-      // We forceren 3 rondes van details vragen
       if (sessionState.detailStep === 0) nextStep = "details_violence";
       else if (sessionState.detailStep === 1) nextStep = "details_items";
       else if (sessionState.detailStep === 2) nextStep = "details_suspects";
@@ -159,8 +168,13 @@ function determineNextAction(fields, sessionState) {
   else if (!fields.location) nextStep = "location";
   else if (fields.location && !fields.zoneLabel) nextStep = "municipality_fix";
 
-  // 4. Wanneer?
-  else if (!fields.datetime) nextStep = "datetime";
+  // 4. Wanneer? (Verbeterde logica)
+  else if (!fields.date) {
+      nextStep = "datetime"; // Vraag alles als er niets is
+  }
+  else if (!fields.time) {
+      nextStep = "time_only"; // We hebben de datum, maar tijdstip mist
+  }
   
   // 5. Contact?
   else if (!fields.email) nextStep = "email";
@@ -168,20 +182,20 @@ function determineNextAction(fields, sessionState) {
 
   // AFRONDING
   if (!nextStep) {
+      const fullDateTime = `${fields.date} ${fields.time}`;
       return {
-          reply: `Ik heb alles genoteerd:\n\n- Naam: ${fields.name}\n- Feit: ${fields.description}\n- Locatie: ${fields.location} (Zone: ${fields.zoneLabel})\n- Tijd: ${fields.datetime}\n- Contact: ${fields.email} | ${fields.phone}\n\nIs dit correct en mag ik het PV indienen?`,
+          reply: `Ik heb alles genoteerd:\n\n- Naam: ${fields.name}\n- Feit: ${fields.description}\n- Locatie: ${fields.location} (Zone: ${fields.zoneLabel})\n- Tijdstip: ${fullDateTime}\n- Contact: ${fields.email} | ${fields.phone}\n\nIs dit correct en mag ik het PV indienen?`,
           isComplete: true,
           priority: determinePriority(fields.description)
       };
   }
 
-  // UPDATE STATE EN RETOURNEER VASTE VRAAG
   if (nextStep.startsWith("details_")) {
-      sessionState.detailStep++; // Verhoog teller voor volgende keer
+      sessionState.detailStep++;
   }
 
   return { 
-      reply: QUESTIONS[nextStep], // Haal de perfecte Nederlandse zin op
+      reply: QUESTIONS[nextStep], 
       isComplete: false, 
       priority: "MIDDEN" 
   };
@@ -190,7 +204,7 @@ function determineNextAction(fields, sessionState) {
 function determinePriority(desc) {
     if (!desc) return "MIDDEN";
     const d = desc.toLowerCase();
-    if (d.includes("wapen") || d.includes("mes") || d.includes("geweld") || d.includes("bloed") || d.includes("pistool")) return "HOOG";
+    if (d.includes("wapen") || d.includes("mes") || d.includes("geweld") || d.includes("bloed")) return "HOOG";
     return "MIDDEN";
 }
 
@@ -209,7 +223,8 @@ module.exports = function initPv(app, db) {
           detailStep: 0, 
           fields: {
             name: null, description: null, location: null, municipality: null,
-            datetime: null, suspectKnown: null, zoneLabel: null,
+            date: null, time: null, // Gesplitst!
+            suspectKnown: null, zoneLabel: null,
             email: null, phone: null,
             confirmed: false,
           },
@@ -218,48 +233,87 @@ module.exports = function initPv(app, db) {
 
       const state = sessionState[sessionId];
 
-      // --- BEVESTIGING CHECK ---
+      // --- BEVESTIGING FASE ---
+ // --- BEVESTIGING FASE ---
       if (state.waitingForConfirmation) {
         const lower = message.toLowerCase();
+        
+        // Check op bevestiging
         if (["ja", "ok", "yes", "goed", "klopt", "correct"].some((w) => lower.includes(w))) {
-          const summary = `Naam: ${state.fields.name}\nEmail: ${state.fields.email}\nTel: ${state.fields.phone}\nFeit: ${state.fields.description}\nLocatie: ${state.fields.location}`;
+          
+          // Datum en tijd samenvoegen voor de 'datum' kolom
+          const finalDateTime = `${state.fields.date} ${state.fields.time}`; 
+
+          // --- DB FIX: APARTE KOLOMMEN ---
           db.run(
-            "INSERT INTO dossiers (datum, beschrijving, samenvatting, prioriteit, locatie_postcode, politie_zone) VALUES (?, ?, ?, ?, ?, ?)",
-            [state.fields.datetime || new Date().toISOString(), state.fields.description, summary, state.priority || "MIDDEN", null, state.fields.zoneLabel],
+            `INSERT INTO dossiers (
+                naam, 
+                email, 
+                telefoon, 
+                locatie, 
+                datum, 
+                beschrijving, 
+                prioriteit, 
+                politie_zone
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                state.fields.name,       // naam
+                state.fields.email,      // email
+                state.fields.phone,      // telefoon
+                state.fields.location,   // locatie
+                finalDateTime,           // datum (gecombineerd)
+                state.fields.description,// beschrijving
+                state.priority || "MIDDEN", 
+                state.fields.zoneLabel
+            ],
             async (err) => {
-              if (err) console.error("DB Error:", err);
+              if (err) {
+                  console.error("DB Error:", err);
+                  return res.json({ response: "Er ging iets mis bij het opslaan in de database.", mode: "report" });
+              }
+              
+              // E-mail versturen (hier gebruiken we nog het object, dat werkt nog steeds)
               await sendPVEmail(state.fields);
+              
+              // Sessie opruimen
               delete sessionState[sessionId];
-              return res.json({ response: `PV Opgeslagen. Bevestiging verstuurd naar ${state.fields.email}.`, mode: "done" });
+              
+              return res.json({ response: `PV Opgeslagen op naam van ${state.fields.name}. Bevestiging is verstuurd naar ${state.fields.email}.`, mode: "done" });
             }
           );
           return;
+
         } else if (lower.includes("nee")) {
           state.waitingForConfirmation = false;
-          // Reset detail step om eventueel opnieuw te vragen indien nodig, of laat staan
           return res.json({ response: "Wat moet er aangepast worden?", mode: "report" });
         }
       }
 
       console.log(`\n💬 User Message: "${message}"`);
       
-      // 1. Extractie (AI)
       const newInfo = await extractInformation(message);
       
-      // 2. Mergen
+      // Update fields
       Object.keys(newInfo).forEach(key => {
         if (newInfo[key] !== null && newInfo[key] !== undefined && newInfo[key] !== "") {
+            
+            // Description appenden
             if (key === 'description') {
                 const oldDesc = state.fields.description || "";
                 if (!oldDesc.includes(newInfo[key])) {
                      state.fields.description = oldDesc ? `${oldDesc} ${newInfo[key]}` : newInfo[key];
                 }
             } 
+            // Locatie reset zone
             else if (key === 'location') {
                 if (state.fields.location !== newInfo[key]) {
                     state.fields.location = newInfo[key];
                     state.fields.zoneLabel = null; 
                 }
+            }
+            // Date/Time specifiek behandelen (niet overschrijven met null)
+            else if (key === 'time' || key === 'date') {
+                state.fields[key] = newInfo[key]; 
             }
             else {
                 state.fields[key] = newInfo[key];
@@ -269,7 +323,6 @@ module.exports = function initPv(app, db) {
       
       console.log("📝 Updated State:", state.fields);
 
-      // 3. Zone Lookup
       if (!state.fields.zoneLabel) {
           const searchTerm = newInfo.municipality || state.fields.location;
           if (searchTerm) {
@@ -278,7 +331,6 @@ module.exports = function initPv(app, db) {
           }
       }
 
-      // 4. Reasoning (Vaste Vragen Logica)
       const decision = determineNextAction(state.fields, state);
 
       state.priority = decision.priority;

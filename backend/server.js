@@ -18,16 +18,19 @@ const db = new sqlite3.Database(dbPath, (err) => {
     db.run('PRAGMA journal_mode = WAL;');
     // Basis tabellen
     db.run(`
-      CREATE TABLE IF NOT EXISTS dossiers (
+    CREATE TABLE IF NOT EXISTS dossiers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        naam TEXT,
+        email TEXT,
+        telefoon TEXT,
+        locatie TEXT,
         datum TEXT,
         beschrijving TEXT,
-        samenvatting TEXT,
         prioriteit TEXT,
-        locatie_postcode TEXT,
         politie_zone TEXT,
-        status TEXT DEFAULT 'open'
-      )
+        status TEXT DEFAULT 'open',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
     `);
     db.run(`
       CREATE TABLE IF NOT EXISTS verkeersregels (
@@ -56,9 +59,11 @@ app.use(bodyParser.json());
 // --- Routes laden ---
 const initRag = require('./routes/rag');
 const initPv = require('./routes/pv');
+const initAdmin = require('./routes/admin');
 
 initRag(app, db);
 initPv(app, db);
+initAdmin(app, db);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

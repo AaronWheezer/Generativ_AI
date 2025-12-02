@@ -3,6 +3,15 @@ import { PoliceChatbot } from "@/components/police-chatbot"
 export default function Home() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden bg-gradient-to-br from-background via-background to-primary/5">
+      {/* Top-right admin link */}
+      <div className="absolute top-4 right-4 z-20">
+        <a
+          href="/admin"
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card hover:border-primary/40 hover:shadow-md transition-all text-sm"
+        >
+          Admin Dashboard
+        </a>
+      </div>
       {/* Decorative background elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-80 h-80 bg-primary/10 rounded-full blur-3xl" />
