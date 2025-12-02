@@ -22,7 +22,7 @@ const initialMessages: Record<"pv" | "vraag", Message> = {
     id: "1",
     role: "assistant",
     content:
-      "Welkom bij de PV assistent. Ik help u stap voor stap bij het opstellen van een proces-verbaal. Wat voor soort overtreding wilt u rapporteren?",
+      "Welkom bij de PV assistent. Beschrijf in uw eerste antwoord zo volledig mogelijk wat er is gebeurd (wie, wat, waar, wanneer).",
   },
   vraag: {
     id: "1",

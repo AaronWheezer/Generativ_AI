@@ -11,6 +11,7 @@ const PORT = process.env.PORT || 3000;
 // --- DATABASE SETUP (gedeeld) ---
 const dbPath = path.join(__dirname, 'politie_dossiers.db');
 const db = new sqlite3.Database(dbPath, (err) => {
+
   if (err) {
     console.error('❌ Error opening database', err);
   } else {
@@ -24,6 +25,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
         email TEXT,
         telefoon TEXT,
         locatie TEXT,
+        stad TEXT, 
         datum TEXT,
         beschrijving TEXT,
         prioriteit TEXT,

@@ -5,11 +5,13 @@ const nodemailer = require("nodemailer");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const CHAT_MODEL = process.env.CHAT_MODEL || "llama3.1";
 const EMBED_MODEL = process.env.EMBED_MODEL || "nomic-embed-text";
+const MAX_DEEP_DIVE_QUESTIONS = Number(process.env.MAX_DEEP_DIVE_QUESTIONS || 3);
+const MIN_DESCRIPTION_WORDS = Number(process.env.MIN_DESCRIPTION_WORDS || 25);
 
 // --- VASTE VRAGEN LIJST ---
 const QUESTIONS = {
     name: "Met wie spreek ik? (Uw volledige naam)",
-    description: "Kunt u in het kort vertellen wat er is gebeurd?",
+    description: "Beschrijf zo volledig mogelijk wat er is gebeurd (wat, wie, waar, wanneer).",
     
     // Deep Dive vragen
     details_violence: "Is er geweld gebruikt of waren er wapens betrokken?",
@@ -46,6 +48,37 @@ async function embed(text) {
   } catch (e) { return []; }
 }
 
+async function generateFollowUpQuestion(descriptionSoFar) {
+  if (!descriptionSoFar?.trim()) return null;
+  const prompt = `
+Je bent een politie-inspecteur. De melder heeft dit tot nu toe gezegd:
+
+"${descriptionSoFar}"
+
+JOUW TAAK:
+- Bepaal welke cruciale informatie nog ontbreekt voor een proces-verbaal.
+- Richt je op feitelijke details over het incident: modus operandi, geweld of wapens, schade of buit, signalementen, voertuigen, getuigen of verwondingen.
+- Vraag NIET naar naam, locatie, datum/tijd of contactgegevens (die komen elders aan bod).
+- Stel één duidelijke, gerichte vraag om ontbrekende feiten te verzamelen.
+- De vraag moet specifiek zijn (geen open vragen zoals "Vertel meer").
+- De vraag moet bruikbaar zijn voor de politie.
+
+Geef alleen de vraag terug, geen uitleg.
+  `;
+
+  try {
+    const res = await axios.post(`${OLLAMA_URL}/api/chat`, {
+      model: CHAT_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      stream: false,
+    });
+    return res.data.message?.content?.trim() || null;
+  } catch (e) {
+    console.error("❌ Follow-up generator error:", e.message);
+    return null;
+  }
+}
+
 function cosineSimilarity(a, b) {
   if (!a?.length || !b?.length) return 0;
   let dot = 0, normA = 0, normB = 0;
@@ -55,6 +88,128 @@ function cosineSimilarity(a, b) {
 
 function normalize(str) {
   return String(str || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9/\-\s]/g, "").trim();
+}
+
+function appendDescription(base, addition) {
+  if (!addition) return base || null;
+  if (!base) return addition.trim();
+  const trimmedBase = base.trim();
+  const trimmedAddition = addition.trim();
+  if (trimmedBase.toLowerCase().includes(trimmedAddition.toLowerCase())) {
+    return trimmedBase;
+  }
+  const separator = /[.!?]$/.test(trimmedBase) ? "" : ".";
+  return `${trimmedBase}${separator} ${trimmedAddition}`.trim();
+}
+
+const DATE_KEYWORDS = [
+  "gisteren",
+  "eergisteren",
+  "vandaag",
+  "morgen",
+  "maandag",
+  "dinsdag",
+  "woensdag",
+  "donderdag",
+  "vrijdag",
+  "zaterdag",
+  "zondag",
+  "weekend",
+  "nacht",
+  "avond",
+  "ochtend",
+  "middag",
+  "januari",
+  "februari",
+  "maart",
+  "april",
+  "mei",
+  "juni",
+  "juli",
+  "augustus",
+  "september",
+  "oktober",
+  "november",
+  "december",
+];
+
+const TIME_KEYWORDS = ["uur", "u", "middernacht", "middag", "avond", "nacht", "morgen", "voormiddag", "namiddag"];
+
+function hasDateIndicator(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  if (DATE_KEYWORDS.some((kw) => lower.includes(kw))) return true;
+  return /\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/.test(lower);
+}
+
+function hasTimeIndicator(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  if (TIME_KEYWORDS.some((kw) => lower.includes(kw))) return true;
+  return /\b\d{1,2}[:u]\d{2}\b/.test(lower) || /\b(rond|ongeveer)\s+\d{1,2}/.test(lower);
+}
+
+const DETAIL_KEYWORDS = [
+  /wapen/i,
+  /mes/i,
+  /pistool/i,
+  /geweld/i,
+  /bloed/i,
+  /gestolen/i,
+  /buit/i,
+  /beschadigd/i,
+  /dader/i,
+  /signalement/i,
+  /voertuig/i,
+  /getuige/i,
+  /verwonding/i,
+];
+
+function needsMoreDetail(description, deepDiveCount = 0) {
+  if (!description) return true;
+  const words = description.split(/\s+/).filter(Boolean);
+  const sentences = description.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+  if (words.length < 12) return true;
+  if (sentences.length < 2) return true;
+  const hasKeyword = DETAIL_KEYWORDS.some((regex) => regex.test(description));
+  if (!hasKeyword && deepDiveCount < MAX_DEEP_DIVE_QUESTIONS) return true;
+  if (words.length < MIN_DESCRIPTION_WORDS && deepDiveCount < MAX_DEEP_DIVE_QUESTIONS) return true;
+  return false;
+}
+
+const NEGATIVE_WORDS = ["nee", "neen", "niet", "no", "geen", "zonder"];
+
+function isNegativeResponse(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return NEGATIVE_WORDS.some((word) => lower.includes(word));
+}
+
+function answerToSentence(lastQuestionKey, questionText, rawAnswer) {
+  if (!rawAnswer) return null;
+  const trimmed = rawAnswer.trim();
+  if (!lastQuestionKey) return trimmed;
+  switch (lastQuestionKey) {
+    case "details_violence":
+      return isNegativeResponse(trimmed)
+        ? "Er werd geen geweld gebruikt en er waren geen wapens aanwezig."
+        : `Er werd geweld gebruikt of een wapen gezien: ${trimmed}`;
+    case "details_items":
+      return isNegativeResponse(trimmed)
+        ? "Er werd niets gestolen of beschadigd."
+        : `Volgende goederen zijn gestolen of beschadigd: ${trimmed}`;
+    case "details_suspects":
+      return isNegativeResponse(trimmed)
+        ? "De melder heeft geen verdachte(n) gezien."
+        : `Beschrijving van verdachte(n): ${trimmed}`;
+    case "auto_follow_up":
+      if (questionText) {
+        return `Op de vraag "${questionText}" antwoordde de melder: ${trimmed}`;
+      }
+      return trimmed;
+    default:
+      return trimmed;
+  }
 }
 
 async function findPoliceZone(db, input) {
@@ -95,6 +250,15 @@ async function sendPVEmail(dossier) {
   return { success: true };
 }
 
+function extractCityFromLocation(location) {
+  if (!location) return null;
+  const splitter = location.split(/[,-]/).map((part) => part.trim()).filter(Boolean);
+  if (splitter.length > 1) return splitter[splitter.length - 1];
+  const match = location.match(/\b(?:in|te|bij)\s+([A-Za-z\s\-]+)/i);
+  if (match) return match[1].trim();
+  return null;
+}
+
 // --- AI AGENT LOGICA ---
 
 // Stap 1: Extractie (Gesplitst in Date en Time)
@@ -102,7 +266,7 @@ async function extractInformation(userMessage) {
   const now = new Date();
   const currentDate = now.toLocaleDateString('nl-BE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const currentTime = now.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
-
+    // to do location make sure its specific if not a real location / city do not fill in and ask for itL.
   const prompt = `
     You are a Data Extractor.
     
@@ -116,7 +280,8 @@ async function extractInformation(userMessage) {
     Fields:
     - name (Full Name)
     - description (Details of incident)
-    - location (Place/City)
+    - location (Place as detailed as possible) 
+    - city (exstract the city from the location if possible)
     - municipality (Only if explicitly named)
     - date (The date of the incident in "YYYY-MM-DD" format. Resolve relative terms like "yesterday".)
     - time (The specific time in "HH:MM" format. IF NOT MENTIONED, RETURN NULL/EMPTY. DO NOT GUESS 00:00.)
@@ -125,9 +290,10 @@ async function extractInformation(userMessage) {
     - suspectKnown (boolean)
 
     Rules:
-    1. Extract ONLY what is in the message.
-    2. If the user only says "Yesterday", set date="2025-XX-XX" and time=null.
-    3. Output JSON ONLY.
+    1. Extract ONLY what is explicitly mentioned in the message.
+    2. NEVER verzin datum of tijd. Laat date/time leeg tenzij de melder duidelijk een datum (of relatieve term zoals "gisteren") of tijd noemt.
+    3. Als er enkel een relatieve term staat (bv. "gisteren"), converteer die naar een datum t.o.v. de huidige context.
+    4. Output JSON ONLY.
   `;
 
   try {
@@ -148,56 +314,72 @@ async function extractInformation(userMessage) {
 }
 
 // Stap 2: Reasoning (Vaste Vragen)
-function determineNextAction(fields, sessionState) {
-  let nextStep = null;
+async function determineNextAction(fields, sessionState) {
+  const deepDiveCount = sessionState.deepDiveCount || 0;
+  const needsDetail = !fields.deepDiveDone && needsMoreDetail(fields.description, deepDiveCount);
 
-  // 1. Wie?
-  if (!fields.name) nextStep = "name";
-  
-  // 2. Wat? (Met Deep Dive)
-  else if (!fields.description) {
-      nextStep = "description";
-  }
-  else if (sessionState.detailStep < 3) {
-      if (sessionState.detailStep === 0) nextStep = "details_violence";
-      else if (sessionState.detailStep === 1) nextStep = "details_items";
-      else if (sessionState.detailStep === 2) nextStep = "details_suspects";
-  }
-  
-  // 3. Waar?
-  else if (!fields.location) nextStep = "location";
-  else if (fields.location && !fields.zoneLabel) nextStep = "municipality_fix";
-
-  // 4. Wanneer? (Verbeterde logica)
-  else if (!fields.date) {
-      nextStep = "datetime"; // Vraag alles als er niets is
-  }
-  else if (!fields.time) {
-      nextStep = "time_only"; // We hebben de datum, maar tijdstip mist
-  }
-  
-  // 5. Contact?
-  else if (!fields.email) nextStep = "email";
-  else if (!fields.phone) nextStep = "phone";
-
-  // AFRONDING
-  if (!nextStep) {
-      const fullDateTime = `${fields.date} ${fields.time}`;
-      return {
-          reply: `Ik heb alles genoteerd:\n\n- Naam: ${fields.name}\n- Feit: ${fields.description}\n- Locatie: ${fields.location} (Zone: ${fields.zoneLabel})\n- Tijdstip: ${fullDateTime}\n- Contact: ${fields.email} | ${fields.phone}\n\nIs dit correct en mag ik het PV indienen?`,
-          isComplete: true,
-          priority: determinePriority(fields.description)
-      };
+  if (!fields.name) {
+    return buildQuestionResponse("name", sessionState);
   }
 
-  if (nextStep.startsWith("details_")) {
-      sessionState.detailStep++;
+  if (!fields.description || (!sessionState.descriptionPrompted && needsDetail)) {
+    sessionState.descriptionPrompted = true;
+    return buildQuestionResponse("description", sessionState);
   }
 
-  return { 
-      reply: QUESTIONS[nextStep], 
-      isComplete: false, 
-      priority: "MIDDEN" 
+  if (needsDetail && deepDiveCount < MAX_DEEP_DIVE_QUESTIONS) {
+    const autoQuestion = await generateFollowUpQuestion(fields.description);
+    if (!autoQuestion) {
+      sessionState.pendingFollowUp = true;
+      return buildQuestionResponse("details_violence", sessionState);
+    }
+    sessionState.pendingFollowUp = true;
+    sessionState.lastQuestion = "auto_follow_up";
+    sessionState.lastQuestionText = autoQuestion;
+    sessionState.expectingLocation = false;
+    return {
+      reply: autoQuestion,
+      isComplete: false,
+      priority: "MIDDEN",
+    };
+  }
+
+  if (!fields.deepDiveDone) {
+    fields.deepDiveDone = true;
+  }
+
+  if (!fields.location) {
+    return buildQuestionResponse("location", sessionState);
+  }
+
+  if (fields.location && !fields.zoneLabel) {
+    return buildQuestionResponse("municipality_fix", sessionState);
+  }
+
+  if (!fields.date) {
+    return buildQuestionResponse("datetime", sessionState);
+  }
+
+s
+
+  if (!fields.email) {
+    return buildQuestionResponse("email", sessionState);
+  }
+
+  if (!fields.phone) {
+    return buildQuestionResponse("phone", sessionState);
+  }
+
+  sessionState.lastQuestion = null;
+  sessionState.lastQuestionText = null;
+  sessionState.expectingLocation = false;
+  const fullDateTime = [fields.date, fields.time].filter(Boolean).join(" ") || "Onbekend";
+  const zoneLabel = fields.zoneLabel || "Onbekend";
+  const cityLabel = fields.city || fields.municipality || "Onbekend";
+  return {
+    reply: `Ik heb alles genoteerd:\n\n- Naam: ${fields.name}\n- Feit: ${fields.description}\n- Locatie: ${fields.location} (${cityLabel}) (Zone: ${zoneLabel})\n- Tijdstip: ${fullDateTime}\n- Contact: ${fields.email} | ${fields.phone}\n\nIs dit correct en mag ik het PV indienen?`,
+    isComplete: true,
+    priority: determinePriority(fields.description),
   };
 }
 
@@ -208,6 +390,17 @@ function determinePriority(desc) {
     return "MIDDEN";
 }
 
+function buildQuestionResponse(key, sessionState) {
+  sessionState.lastQuestion = key;
+  sessionState.lastQuestionText = QUESTIONS[key];
+  sessionState.expectingLocation = key === "location";
+  return {
+    reply: QUESTIONS[key],
+    isComplete: false,
+    priority: "MIDDEN",
+  };
+}
+
 // In-memory state
 const sessionState = {};
 
@@ -216,17 +409,25 @@ module.exports = function initPv(app, db) {
     try {
       const { sessionId, message } = req.body;
       if (!sessionId || !message) return res.status(400).json({ error: "Missing data" });
+      const incomingMessage = typeof message === "string" ? message : String(message || "");
 
       if (!sessionState[sessionId]) {
         sessionState[sessionId] = {
           mode: "active",
-          detailStep: 0, 
+          pendingFollowUp: false,
+          expectingLocation: false,
+          lastQuestion: null,
+          lastQuestionText: null,
+          deepDiveCount: 0,
+          descriptionPrompted: false,
           fields: {
             name: null, description: null, location: null, municipality: null,
             date: null, time: null, // Gesplitst!
             suspectKnown: null, zoneLabel: null,
             email: null, phone: null,
+            city: null,
             confirmed: false,
+            deepDiveDone: false,
           },
         };
       }
@@ -236,13 +437,14 @@ module.exports = function initPv(app, db) {
       // --- BEVESTIGING FASE ---
  // --- BEVESTIGING FASE ---
       if (state.waitingForConfirmation) {
-        const lower = message.toLowerCase();
+        const lower = incomingMessage.toLowerCase();
         
         // Check op bevestiging
         if (["ja", "ok", "yes", "goed", "klopt", "correct"].some((w) => lower.includes(w))) {
           
           // Datum en tijd samenvoegen voor de 'datum' kolom
-          const finalDateTime = `${state.fields.date} ${state.fields.time}`; 
+          const finalDateTime = [state.fields.date, state.fields.time].filter(Boolean).join(" "); 
+          state.fields.city = state.fields.city || state.fields.municipality || extractCityFromLocation(state.fields.location);
 
           // --- DB FIX: APARTE KOLOMMEN ---
           db.run(
@@ -251,18 +453,20 @@ module.exports = function initPv(app, db) {
                 email, 
                 telefoon, 
                 locatie, 
+                stad,
                 datum, 
                 beschrijving, 
                 prioriteit, 
                 politie_zone
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-                state.fields.name,       // naam
-                state.fields.email,      // email
-                state.fields.phone,      // telefoon
-                state.fields.location,   // locatie
-                finalDateTime,           // datum (gecombineerd)
-                state.fields.description,// beschrijving
+                state.fields.name,        // naam
+                state.fields.email,       // email
+                state.fields.phone,       // telefoon
+                state.fields.location,    // locatie
+                state.fields.city,        // stad
+                finalDateTime,            // datum (gecombineerd)
+                state.fields.description, // beschrijving
                 state.priority || "MIDDEN", 
                 state.fields.zoneLabel
             ],
@@ -289,9 +493,20 @@ module.exports = function initPv(app, db) {
         }
       }
 
-      console.log(`\n💬 User Message: "${message}"`);
+      console.log(`\n💬 User Message: "${incomingMessage}"`);
+
+      if (state.expectingLocation) {
+        const cleanLocation = incomingMessage.trim();
+        if (cleanLocation) {
+          state.fields.location = cleanLocation;
+          state.fields.city = extractCityFromLocation(cleanLocation) || state.fields.city;
+        }
+        state.expectingLocation = false;
+      }
       
-      const newInfo = await extractInformation(message);
+      const newInfo = await extractInformation(incomingMessage);
+      const messageHasDate = hasDateIndicator(incomingMessage);
+      const messageHasTime = hasTimeIndicator(incomingMessage);
       
       // Update fields
       Object.keys(newInfo).forEach(key => {
@@ -299,39 +514,66 @@ module.exports = function initPv(app, db) {
             
             // Description appenden
             if (key === 'description') {
-                const oldDesc = state.fields.description || "";
-                if (!oldDesc.includes(newInfo[key])) {
-                     state.fields.description = oldDesc ? `${oldDesc} ${newInfo[key]}` : newInfo[key];
-                }
+              state.fields.description = appendDescription(state.fields.description, newInfo[key]);
             } 
             // Locatie reset zone
             else if (key === 'location') {
-                if (state.fields.location !== newInfo[key]) {
-                    state.fields.location = newInfo[key];
-                    state.fields.zoneLabel = null; 
-                }
+              const incomingLocation = newInfo[key];
+              if (!state.fields.location || (incomingLocation && incomingLocation.length > state.fields.location.length)) {
+                state.fields.location = incomingLocation;
+              }
+              if (incomingLocation) {
+                state.fields.zoneLabel = null;
+                const derivedCity = extractCityFromLocation(state.fields.location) || extractCityFromLocation(incomingLocation);
+                if (derivedCity) state.fields.city = derivedCity;
+                else if (!state.fields.city) state.fields.city = incomingLocation;
+              }
+            }
+            else if (key === 'municipality') {
+              state.fields.municipality = newInfo[key];
+              state.fields.city = newInfo[key];
             }
             // Date/Time specifiek behandelen (niet overschrijven met null)
-            else if (key === 'time' || key === 'date') {
-                state.fields[key] = newInfo[key]; 
+            else if (key === 'date') {
+                if (messageHasDate && newInfo[key]) {
+                  state.fields.date = newInfo[key];
+                }
+            }
+            else if (key === 'time') {
+                if (messageHasTime && newInfo[key]) {
+                  state.fields.time = newInfo[key];
+                }
             }
             else {
                 state.fields[key] = newInfo[key];
             }
         }
       });
+          const trimmedMessage = incomingMessage.trim();
+          if (state.pendingFollowUp && trimmedMessage) {
+            if (!newInfo.description) {
+              const contextual = answerToSentence(state.lastQuestion, state.lastQuestionText, trimmedMessage);
+              state.fields.description = appendDescription(state.fields.description, contextual || trimmedMessage);
+            }
+            state.pendingFollowUp = false;
+            state.deepDiveCount = (state.deepDiveCount || 0) + 1;
+            const needMore = needsMoreDetail(state.fields.description, state.deepDiveCount);
+            if (!needMore || state.deepDiveCount >= MAX_DEEP_DIVE_QUESTIONS) {
+              state.fields.deepDiveDone = true;
+            }
+          }
       
       console.log("📝 Updated State:", state.fields);
 
-      if (!state.fields.zoneLabel) {
-          const searchTerm = newInfo.municipality || state.fields.location;
+        if (!state.fields.zoneLabel) {
+          const searchTerm = state.fields.city || newInfo.municipality || state.fields.location;
           if (searchTerm) {
               const zone = await findPoliceZone(db, searchTerm);
               if (zone) state.fields.zoneLabel = zone.label;
           }
       }
 
-      const decision = determineNextAction(state.fields, state);
+        const decision = await determineNextAction(state.fields, state);
 
       state.priority = decision.priority;
       if (decision.isComplete) state.waitingForConfirmation = true;
