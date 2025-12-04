@@ -5,7 +5,7 @@ const pdfParse = require('pdf-parse');
 
 // Config
 // We gebruiken hier bge-m3 zoals besproken, dit werkt beter voor NL
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const EMBED_MODEL = process.env.EMBED_MODEL || 'bge-m3'; 
 const CHAT_MODEL = process.env.CHAT_MODEL || 'mistral-nemo';
 
