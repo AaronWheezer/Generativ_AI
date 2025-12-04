@@ -3,7 +3,16 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const sqlite3 = require('sqlite3').verbose();
-const path = require('node:path'); // Add this at top
+const path = require('node:path');
+
+// MCP mailer automatisch starten (nu na path import)
+const { spawn } = require('child_process');
+const mcpMailerPath = path.join(__dirname, 'mcp-mailer', 'index.js');
+const mcpMailerProcess = spawn('node', [mcpMailerPath], {
+  cwd: path.join(__dirname, 'mcp-mailer'),
+  stdio: 'inherit',
+});
+console.log('🚀 MCP mailer wordt automatisch gestart...');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,7 +21,6 @@ const PORT = process.env.PORT || 3000;
 const dbPath = path.join(__dirname, 'politie_dossiers.db');
 const db = new sqlite3.Database(dbPath, (err) => {
   // drop police_zones table if exists
-
 
   if (err) {
     console.error('❌ Error opening database', err);
@@ -73,4 +81,6 @@ initAdmin(app, db);
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => console.log(`🚀 Politie AI Server draait op http://localhost:${PORT}`));
+app.listen(PORT, () =>
+  console.log(`🚀 Politie AI Server draait op http://localhost:${PORT}`)
+);
