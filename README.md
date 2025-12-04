@@ -9,7 +9,8 @@ npm install pdf-parse sqlite3 cors express body-parser openai
 npm install --save axios
 ollama / install
 nomic-embed-text
-
+ollama pull bge-m3
+ollama pull mistral-nemo
 backend:
     node .\server.js
     node .\load_pdf.js -- is voor eenmalig pdf inladen -> embedding voor de database

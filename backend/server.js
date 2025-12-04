@@ -11,10 +11,14 @@ const PORT = process.env.PORT || 3000;
 // --- DATABASE SETUP (gedeeld) ---
 const dbPath = path.join(__dirname, 'politie_dossiers.db');
 const db = new sqlite3.Database(dbPath, (err) => {
+  // drop police_zones table if exists
+
 
   if (err) {
     console.error('❌ Error opening database', err);
   } else {
+    //drop verkeersregels table if exists
+
     console.log('✅ Verbonden met SQLite database.');
     db.run('PRAGMA journal_mode = WAL;');
     // Basis tabellen

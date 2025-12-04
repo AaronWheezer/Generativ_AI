@@ -35,7 +35,7 @@ async function embed(text) {
     try {
         const res = await axios.post(
             "http://localhost:11434/api/embed",
-            { model: "nomic-embed-text", input: text },
+            { model: "bge-m3", input: text },
             { headers: { "Content-Type": "application/json" } }
         );
         if (Array.isArray(res.data.embedding)) return res.data.embedding;

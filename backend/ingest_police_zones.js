@@ -6,7 +6,7 @@ const pdfParse = require('pdf-parse');
 const axios = require('axios');
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const EMBED_MODEL = process.env.EMBED_MODEL || 'nomic-embed-text';
+const EMBED_MODEL = process.env.EMBED_MODEL || 'bge-m3';
 
 // DE STRICTE LIJST DIE JIJ HEBT OPGEGEVEN
 // We gebruiken deze om te checken of een regel hierop eindigt.
