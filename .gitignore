@@ -9,3 +9,4 @@ logs/
 *.log
 backend/node_modules/
 .next/
+*.db

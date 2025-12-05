@@ -1,311 +1,346 @@
-const OpenAI = require('openai');
-const axios = require('axios');
-const fs = require('node:fs');
-const pdfParse = require('pdf-parse');
+const OpenAI = require("openai");
+const axios = require("axios");
+const fs = require("node:fs");
+const pdfParse = require("pdf-parse");
 
-// Config
-// We gebruiken hier bge-m3 zoals besproken, dit werkt beter voor NL
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
-const EMBED_MODEL = process.env.EMBED_MODEL || 'bge-m3';
-const CHAT_MODEL = process.env.CHAT_MODEL || 'mistral-nemo';
+// ---------------------------------------------------
+// CONFIG
+// ---------------------------------------------------
 
-const openai = new OpenAI({ baseURL: `${OLLAMA_URL}/v1`, apiKey: 'ollama' });
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+const EMBED_MODEL = process.env.EMBED_MODEL || "bge-m3";
+const CHAT_MODEL = process.env.CHAT_MODEL || "mistral-nemo"; // of llama3.2
 
-// --- HELPER FUNCTIES ---
+const openai = new OpenAI({
+  baseURL: `${OLLAMA_URL}/v1`,
+  apiKey: "ollama",
+});
+
+// ---------------------------------------------------
+// HELPER: EMBEDDING
+// ---------------------------------------------------
 
 async function embed(text) {
-  if (!text?.trim()) return [];
+  if (!text?.trim()) return null;
+
   try {
     const res = await axios.post(
       `${OLLAMA_URL}/api/embed`,
-      {
-        model: EMBED_MODEL,
-        input: text,
-      },
-      { headers: { 'Content-Type': 'application/json' } }
+      { model: EMBED_MODEL, input: text },
+      { headers: { "Content-Type": "application/json" } }
     );
+
     if (Array.isArray(res.data.embedding)) return res.data.embedding;
-    if (Array.isArray(res.data.embeddings)) return res.data.embeddings[0] || [];
-    return [];
+    if (Array.isArray(res.data.embeddings)) return res.data.embeddings[0];
+
+    return null;
   } catch (e) {
-    console.error('⚠️ Embed error:', e.message);
-    return [];
+    console.error("⚠️ Embed error:", e.message);
+    return null;
   }
 }
 
-function cosineSimilarity(a, b) {
-  if (!a?.length || !b?.length) return 0;
-  const len = Math.min(a.length, b.length);
-  let dot = 0,
-    normA = 0,
-    normB = 0;
-  for (let i = 0; i < len; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  return normA === 0 || normB === 0
-    ? 0
-    : dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
+// ---------------------------------------------------
+// HELPER: LEGAL TEXT CLEANING
+// ---------------------------------------------------
 
 function cleanLegalText(text) {
   return text
-    .split('\n')
+    .split("\n")
     .filter((line) => {
       const l = line.trim();
-      if (/^\d+$/.test(l)) return false; // Alleen nummers weg
-      if (l.length < 4) return false; // Te korte regels weg
-      if (l.includes('BELGISCH STAATSBLAD')) return false;
+      if (/^\d+$/.test(l)) return false;
+      if (l.includes("BELGISCH STAATSBLAD")) return false;
+      if (l.length < 4) return false;
       return true;
     })
-    .join('\n');
+    .join("\n");
 }
 
-function smartChunk(text) {
+// ---------------------------------------------------
+// HELPER: SMART CHUNKING WITH OVERLAP
+// ---------------------------------------------------
+
+function smartChunk(text, maxLen = 800) {
   const cleaned = cleanLegalText(text);
   const lines = cleaned.split(/\r?\n/);
   const chunks = [];
-  let buffer = '';
+  let buffer = "";
+
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    // Detecteer nieuw artikel (Art. 1, Artikel 2, etc.)
-    const isNewArticle = /^Art(\.|ikel)\s?\d+/i.test(trimmed);
-    const bufferTooBig = buffer.length > 900;
+
+    const isHeading = /^Art(\.|ikel)\s?\d+|HOOFDSTUK/i.test(trimmed);
+    const tooLarge = buffer.length > maxLen;
 
     if (
-      (bufferTooBig && (trimmed.length < 100 || isNewArticle)) ||
-      (isNewArticle && buffer.length > 200)
+      (tooLarge && trimmed.length < 100) ||
+      (isHeading && buffer.length > 200)
     ) {
-      if (buffer) chunks.push(buffer.trim());
-      buffer = trimmed;
+      if (buffer) {
+        chunks.push(buffer.trim());
+
+        // overlap
+        const words = buffer.split(" ");
+        let overlap = "";
+        if (words.length > 20) {
+          overlap = words.slice(-20).join(" ") + " ... ";
+        }
+        buffer = overlap + trimmed;
+      } else {
+        buffer = trimmed;
+      }
     } else {
-      buffer += (buffer ? '\n' : '') + trimmed;
+      buffer += (buffer ? "\n" : "") + trimmed;
     }
   }
+
   if (buffer) chunks.push(buffer.trim());
   return chunks.filter((c) => c.length > 50);
 }
 
-const SYNONYMS = [
-  ['snelheid', 'maximumsnelheid', 'snelheidslimiet', 'km/u'],
-  ['autosnelweg', 'autostrade', 'snelweg'],
-  ['trottoir', 'voetpad', 'stoep'],
-  ['parkeren', 'parkeer', 'stationeren', 'stilstaan'],
-  ['fiets', 'rijwiel', 'elektrische fiets'],
-  ['bebouwde kom', 'bebouwde_kom', 'dorpskern'],
-];
+// ---------------------------------------------------
+// VECTOR SEARCH (sqlite-vec)
+// ---------------------------------------------------
 
-function expandQuery(original) {
-  const lower = original.toLowerCase();
-  const expansions = new Set([lower]);
-  for (const group of SYNONYMS) {
-    if (group.some((term) => lower.includes(term))) {
-      for (const term of group)
-        expansions.add(
-          lower.replace(new RegExp(`\\b(${group.join('|')})\\b`, 'g'), term)
-        );
-      group.forEach((t) => expansions.add(t));
-    }
-  }
-  return Array.from(expansions).slice(0, 10);
-}
+async function vectorSearch(db, queryText) {
+  const vector = await embed(queryText);
+  if (!vector) return [];
 
-function tokenize(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9à-ÿ]+/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean);
-}
+  const floatArray = new Float32Array(vector);
+  const blob = Buffer.from(floatArray.buffer);
 
-function lexicalScore(queryTokens, chunk) {
-  const chunkTokens = new Set(tokenize(chunk));
-  let match = 0;
-  const uniqueQuery = new Set(queryTokens);
-  for (const t of uniqueQuery) if (chunkTokens.has(t)) match++;
-  return uniqueQuery.size ? match / uniqueQuery.size : 0;
-}
-
-// Hybride zoekfunctie met drempelwaarde
-async function hybridRetrieve(db, query) {
-  const expansions = expandQuery(query);
-  const baseEmb = await embed(query);
   return new Promise((resolve, reject) => {
-    db.all(
-      'SELECT id, content, embedding FROM verkeersregels',
-      [],
-      async (err, rows) => {
-        if (err) return reject(err);
-        const results = [];
-        for (const r of rows) {
-          let embArr = [];
-          try {
-            embArr = JSON.parse(r.embedding);
-          } catch {
-            continue;
-          }
+    const sql = `
+      SELECT vr.content, vr.source_file, vec.distance
+      FROM vec_verkeersregels vec
+      JOIN verkeersregels vr ON vec.rowid_ref = vr.id
+      WHERE vec.embedding MATCH ?
+      AND k = 5
+      ORDER BY vec.distance ASC
+    `;
 
-          const embSim =
-            baseEmb.length && embArr.length
-              ? cosineSimilarity(baseEmb, embArr)
-              : 0;
-
-          let bestLex = 0;
-          for (const exp of expansions) {
-            const ls = lexicalScore(tokenize(exp), r.content);
-            if (ls > bestLex) bestLex = ls;
-          }
-
-          // Weging: 70% vector, 30% trefwoorden
-          const combined = embSim * 0.7 + bestLex * 0.3;
-          results.push({
-            ...r,
-            embScore: embSim,
-            lexScore: bestLex,
-            score: combined,
-          });
-        }
-
-        // FILTER: Alleen resultaten met score > 0.35
-        // Als alles hieronder valt, wordt docs.length 0 en treedt Fallback in werking.
-        const top = results
-          .filter((r) => r.score > 0.35)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 4);
-        resolve(top);
-      }
-    );
+    db.all(sql, [blob], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
+    });
   });
 }
 
-// --- MAIN MODULE ---
+// ---------------------------------------------------
+// MAIN MODULE
+// ---------------------------------------------------
 
 module.exports = function initRag(app, db) {
-  // Chat endpoint met MODEL CHAINING / FALLBACK
-  app.post('/api/rag/chat', async (req, res) => {
+
+  // =======================================================
+  // CHAT: INSPECTEUR JANSSENS (STRICT – ANTI-HALLUCINATIE)
+  // =======================================================
+
+  app.post("/api/rag/chat", async (req, res) => {
     try {
       const { message } = req.body;
       if (!message?.trim())
-        return res.status(400).json({ error: 'message required' });
+        return res.status(400).json({ error: "Bericht vereist" });
 
-      console.log(`🔎 RAG Zoeken voor: "${message}"`);
-      const docs = await hybridRetrieve(db, message);
+      console.log(`🔎 Vraag: "${message}"`);
 
-      let systemPrompt = '';
+      const docs = await vectorSearch(db, message);
+      const THRESHOLD = 1.35;
+      const relevantDocs = docs.filter((d) => d.distance < THRESHOLD);
+
+      let systemPrompt = "";
       let usedRAG = false;
-      let modelTemp = 0.7; // Standaard creativiteit voor fallback
 
-      // --- BRANCH 1: RAG SUCCESVOL (Bronnen gevonden) ---
-      if (docs.length > 0) {
+      // ---------------------------------------------------
+      // SCENARIO A: RAG BRONNEN GEVONDEN
+      // ---------------------------------------------------
+
+      if (relevantDocs.length > 0) {
         usedRAG = true;
-        modelTemp = 0.2; // Lager voor feitelijkheid
-        const contextText = docs.map((d) => `${d.content}`).join('\n\n');
 
-        systemPrompt = `Je bent Inspecteur Janssens, een expert in Belgische verkeerswetgeving.
+        const context = relevantDocs
+          .map((d) => d.content)
+          .join("\n\n");
 
-CONTEXT:
-${contextText}
+        systemPrompt = `
+Je bent Inspecteur Janssens, een officiële en feitelijke AI-assistent van de Belgische Politie.
 
-INSTRUCTIES:
-1. Gebruik de bovenstaande BRONNEN om de vraag te beantwoorden.
-2. Vertaal de juridische wettekst naar HELDER, BEGRIJPELIJK Nederlands voor de burger. Leg termen uit indien nodig.
-3. Wees formeel maar vriendelijk.
-4. Als de bronnen het antwoord NIET bevatten, verzin dan niets.`;
+Je taak:
+- Geef enkel antwoorden die *letterlijk* in de context staan.
+- Geen bronnen vermelden.
+- Geen artikelnummers verzinnen.
+- Geen interpretaties, enkel tekstgetrouwe info.
+- Indien de tekst geen exact antwoord bevat, zeg precies:
+  "Ik kan dit specifieke antwoord niet terugvinden in de wetteksten die ik tot mijn beschikking heb."
+- Blijf strikt, feitelijk en kort.
+
+CONTEXT (wettekst):
+${context}
+
+Vraag: "${message}"
+`;
       }
-      // --- BRANCH 2: FALLBACK (Geen relevante bronnen) ---
+
+      // ---------------------------------------------------
+      // SCENARIO B: GEEN RAG → FALLBACK
+      // ---------------------------------------------------
+
       else {
+        console.log("⚠️ Geen relevante wetteksten → fallback");
         usedRAG = false;
-        modelTemp = 0.7; // Iets hoger zodat hij vlotter praat uit algemene kennis
-        console.log('⚠️ Geen RAG-docs gevonden, schakel over naar Fallback.');
 
-        systemPrompt = `Je bent Inspecteur Janssens, een behulpzame virtuele politieagent.
+        systemPrompt = `
+Je bent Inspecteur Janssens.
 
-De gebruiker stelt een vraag waarover GEEN specifieke wettekst is gevonden in jouw huidige database.
+Er zijn geen relevante wetteksten gevonden.
 
-INSTRUCTIES:
-1. Beantwoord de vraag op basis van je ALGEMENE KENNIS over verkeersveiligheid en gezond verstand.
-2. Je MOET je antwoord beginnen met de volgende disclaimer: "Ik heb hiervoor geen specifiek wetsartikel gevonden in mijn databank, maar in het algemeen geldt..."
-3. Wees voorzichtig met het noemen van specifieke boetebedragen als je het niet zeker weet.
-4. Focus op veiligheid en hoffelijkheid in het verkeer.`;
+Regels:
+1. Begin ELK antwoord met:
+   "Mijn excuses, ik vind hierover geen specifiek wetsartikel in mijn huidige databank, maar algemeen geldt..."
+2. Geef een kort, algemeen advies volgens Belgische verkeersregels.
+3. Nooit juridisch advies.
+4. Geen bronnen of artikelnummers.
+5. Blijf neutraal en feitelijk.
+
+Vraag: "${message}"
+`;
       }
+
+      // ---------------------------------------------------
+      // MODEL CALL
+      // ---------------------------------------------------
 
       const completion = await openai.chat.completions.create({
         model: CHAT_MODEL,
         messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: message },
+          { role: "system", content: systemPrompt },
+          { role: "user", content: message },
         ],
-        temperature: modelTemp,
+        temperature: usedRAG ? 0.1 : 0.5,
       });
 
-      const answer =
-        completion.choices?.[0]?.message?.content ||
-        'Er ging iets mis bij het genereren van een antwoord.';
+      let answer = completion.choices?.[0]?.message?.content || "";
 
-      // Stuur terug inclusief status zodat frontend kan zien wat er gebeurde
+      // ---------------------------------------------------
+      // FAILSAFE: RAG ZONDER ANTWOORD → FORCED FALLBACK
+      // ---------------------------------------------------
+
+      if (
+        usedRAG &&
+        answer.toLowerCase().includes("ik kan dit specifieke antwoord niet terugvinden")
+      ) {
+        console.log("⚠️ RAG-fail → forced fallback");
+
+        const fbPrompt = `
+Je bent Inspecteur Janssens.
+
+Er kon geen bruikbare wettekst gevonden worden.
+
+Begin verplicht met:
+"Mijn excuses, ik vind hierover geen specifiek wetsartikel in mijn huidige databank, maar algemeen geldt..."
+
+Geef daarna een neutraal, kort verkeersadvies.
+`;
+
+        const fb = await openai.chat.completions.create({
+          model: CHAT_MODEL,
+          messages: [
+            { role: "system", content: fbPrompt },
+            { role: "user", content: message },
+          ],
+          temperature: 0.5,
+        });
+
+        answer = fb.choices?.[0]?.message?.content || answer;
+        usedRAG = false;
+      }
+
+      // ---------------------------------------------------
+      // RESPONSE
+      // ---------------------------------------------------
+
       res.json({
         response: answer,
         rag: {
           used: usedRAG,
-          sources: docs,
+          sources: usedRAG
+            ? relevantDocs.map((d) => ({
+                dist: d.distance,
+                file: d.source_file,
+              }))
+            : [],
         },
-        mode: usedRAG ? 'rag_verified' : 'fallback_general',
       });
+
     } catch (e) {
-      console.error('RAG Chat Error:', e);
-      res.status(500).json({ error: 'Interne server fout' });
+      console.error("RAG Chat Error:", e);
+      res.status(500).json({ error: "Interne fout." });
     }
   });
 
-  // Ingest endpoint (blijft hetzelfde, maar gebruikt nu BGE-M3 config)
-  app.post('/api/rag/ingest-pdf', async (req, res) => {
+  // =======================================================
+  // INGEST PDF
+  // =======================================================
+
+  app.post("/api/rag/ingest-pdf", async (req, res) => {
     try {
-      const { path } = req.body;
-      if (!path || !fs.existsSync(path))
-        return res.status(400).json({ error: 'Bestand niet gevonden' });
+      const { path: filePath } = req.body;
+      if (!filePath || !fs.existsSync(filePath))
+        return res.status(400).json({ error: "Bestand niet gevonden." });
 
-      console.log(`📄 Start verwerking PDF: ${path}`);
-      const data = fs.readFileSync(path);
+      console.log(`📄 Ingest PDF: ${filePath}`);
+
+      const data = fs.readFileSync(filePath);
       const pdf = await pdfParse(data);
+
       const chunks = smartChunk(pdf.text);
+      console.log(`🧩 ${chunks.length} chunks`);
 
-      console.log(
-        `🧩 PDF gesplitst in ${chunks.length} chunks. Start embedding met ${EMBED_MODEL}...`
-      );
-      let processedCount = 0;
+      const fileName = filePath.split(/[/\\]/).pop();
+      let count = 0;
 
-      // Batch processing om server niet te overbelasten
-      const batchSize = 5;
-      for (let i = 0; i < chunks.length; i += batchSize) {
-        const batch = chunks.slice(i, i + batchSize);
-        await Promise.all(
-          batch.map(async (chunk) => {
-            const emb = await embed(chunk);
-            if (!emb || emb.length === 0) return;
-            return new Promise((resolve, reject) => {
-              db.run(
-                'INSERT INTO verkeersregels (source_file, content, embedding) VALUES (?, ?, ?)',
-                [path, chunk, JSON.stringify(emb)],
-                (err) => {
-                  if (err) reject(err);
-                  else {
-                    processedCount++;
-                    resolve();
-                  }
-                }
-              );
+      for (const chunk of chunks) {
+        const emb = await embed(chunk);
+        if (!emb) continue;
+
+        await new Promise((resolve, reject) => {
+          const stmt = db.prepare(
+            "INSERT INTO verkeersregels (source_file, content) VALUES (?, ?)"
+          );
+
+          stmt.run(fileName, chunk, function (err) {
+            if (err) {
+              stmt.finalize();
+              return reject(err);
+            }
+
+            const id = this.lastID;
+
+            const vecStmt = db.prepare(
+              "INSERT INTO vec_verkeersregels (rowid_ref, embedding) VALUES (?, ?)"
+            );
+
+            const float32 = new Float32Array(emb);
+            const buf = Buffer.from(float32.buffer);
+
+            vecStmt.run(id, buf, (err2) => {
+              vecStmt.finalize();
+              stmt.finalize();
+              if (err2) reject(err2);
+              else resolve();
             });
-          })
-        );
+          });
+        });
+
+        count++;
       }
 
-      console.log(`✅ Klaar! ${processedCount} chunks opgeslagen.`);
-      res.json({ status: 'ok', inserted: processedCount });
+      res.json({ status: "ok", inserted: count });
     } catch (e) {
-      console.error('RAG Ingest Error:', e);
-      res.status(500).json({ error: 'Ingest mislukt.' });
+      console.error("INGEST Error:", e);
+      res.status(500).json({ error: "Ingest mislukt." });
     }
   });
 };
