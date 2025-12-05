@@ -23,7 +23,7 @@ export function AdminDashboard() {
           municipality: r.location || "",
           datetime: r.datetime || new Date().toISOString(),
           zoneLabel: r.zoneLabel || "",
-          confirmed: (r.status || "").toLowerCase() === "closed" || (r.status || "").toLowerCase() === "bevestigd",
+          confirmed: (r.status || "").toLowerCase() === "closed" || (r.status || "").toLowerCase() === "bevestigd" || (r.status || "").toLowerCase() === "afgerond",
           email: r.email || "",
           phone: r.phone || "",
           prioriteit: r.prioriteit || "MIDDEN",
@@ -71,6 +71,35 @@ export function AdminDashboard() {
     }
   }
 
+  const handleDeletePV = async (pvId: number) => {
+    if (!confirm('Weet je zeker dat je dit PV wilt verwijderen?')) return
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/dossiers/${pvId}`, {
+        method: "DELETE"
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setRecords((prev) => prev.filter((pv) => pv.id !== pvId))
+    } catch (e) {
+      console.error("Admin delete error:", e)
+    }
+  }
+
+  const handleCompletePV = async (pvId: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/dossiers/${pvId}/complete`, {
+        method: "PUT"
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setRecords((prev) => prev.map((pv) => 
+        pv.id === pvId 
+          ? { ...pv, status: 'afgerond', confirmed: true } 
+          : pv
+      ))
+    } catch (e) {
+      console.error("Admin complete error:", e)
+    }
+  }
+
   const stats = {
     total: records.length,
     confirmed: records.filter((r) => r.confirmed).length,
@@ -86,7 +115,7 @@ export function AdminDashboard() {
           <p className="text-3xl font-semibold text-foreground mt-1">{stats.total}</p>
         </div>
         <div className="bg-card border border-border rounded-xl p-5">
-          <p className="text-sm text-muted-foreground">Bevestigd</p>
+          <p className="text-sm text-muted-foreground">Afgerond</p>
           <p className="text-3xl font-semibold text-green-600 mt-1">{stats.confirmed}</p>
         </div>
         <div className="bg-card border border-border rounded-xl p-5">
@@ -102,7 +131,12 @@ export function AdminDashboard() {
       </div>
 
       {/* PV List */}
-      <PVList records={records} onSelect={handleSelectPV} />
+      <PVList 
+        records={records} 
+        onSelect={handleSelectPV} 
+        onDelete={handleDeletePV}
+        onComplete={handleCompletePV}
+      />
 
       {/* Edit Modal */}
       {selectedPV && <PVEditModal pv={selectedPV} onClose={handleCloseModal} onSave={handleSavePV} />}
