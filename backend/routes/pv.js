@@ -6,7 +6,7 @@ const nodemailer = require('nodemailer');
 
 // --- CONFIGURATIE ---
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
-const CHAT_MODEL = process.env.CHAT_MODEL || 'llama3.1'; // Ensure this model supports JSON mode well
+const CHAT_MODEL = process.env.CHAT_MODEL || 'mistral-nemo'; // Ensure this model supports JSON mode well
 const EMBED_MODEL = process.env.EMBED_MODEL || 'bge-m3';
 const MAX_DEEP_DIVE_QUESTIONS = Number(
   process.env.MAX_DEEP_DIVE_QUESTIONS || 5
@@ -499,7 +499,7 @@ async function findPoliceZone(db, input) {
   // 1. Input normaliseren
   const parts = input.split(' ');
   // We zoeken op de losse woorden EN op de hele zin
-  const searchTerms = [...parts, input].filter(t => t.length > 2); // Filter korte woordjes weg
+  const searchTerms = [...parts, input].filter((t) => t.length > 2); // Filter korte woordjes weg
 
   return new Promise((resolve) => {
     db.all(
@@ -507,30 +507,32 @@ async function findPoliceZone(db, input) {
       [],
       async (err, rows) => {
         if (err || !rows) {
-            console.error("DB Error of geen rijen:", err);
-            return resolve(null);
+          console.error('DB Error of geen rijen:', err);
+          return resolve(null);
         }
 
         // --- STAP 1: Exacte (genormaliseerde) match ---
         for (const term of searchTerms) {
           const target = normalize(term); // bv: "antwerpen"
-          
+
           for (const r of rows) {
             let munis = [];
             try {
               munis = JSON.parse(r.municipalities);
-            } catch (e) { continue; }
+            } catch (e) {
+              continue;
+            }
 
             if (Array.isArray(munis)) {
               // FIX: Normaliseer ook de data uit de DB voordat je vergelijkt
-              const match = munis.some(m => normalize(m) === target);
-              
+              const match = munis.some((m) => normalize(m) === target);
+
               if (match) {
                 // Gevonden op naam!
                 return resolve({
                   label: r.zone_name,
                   value: r.arrondissement || null,
-                  matchType: 'text' // Debug info
+                  matchType: 'text', // Debug info
                 });
               }
             }
@@ -541,26 +543,29 @@ async function findPoliceZone(db, input) {
         // Alleen doen als text match faalt
         let best = null;
         try {
-            const qEmb = await embed(input); // Zorg dat embed() beschikbaar is in deze scope!
-            
-            if (qEmb && qEmb.length > 0) {
-                for (const r of rows) {
-                    let embArr = [];
-                    try {
-                        embArr = JSON.parse(r.embedding);
-                    } catch { continue; }
+          const qEmb = await embed(input); // Zorg dat embed() beschikbaar is in deze scope!
 
-                    const score = (embArr.length === qEmb.length) 
-                        ? cosineSimilarity(qEmb, embArr) 
-                        : 0;
+          if (qEmb && qEmb.length > 0) {
+            for (const r of rows) {
+              let embArr = [];
+              try {
+                embArr = JSON.parse(r.embedding);
+              } catch {
+                continue;
+              }
 
-                    if (!best || score > best.score) {
-                        best = { score, row: r };
-                    }
-                }
+              const score =
+                embArr.length === qEmb.length
+                  ? cosineSimilarity(qEmb, embArr)
+                  : 0;
+
+              if (!best || score > best.score) {
+                best = { score, row: r };
+              }
             }
+          }
         } catch (err) {
-            console.error("Embedding search error:", err);
+          console.error('Embedding search error:', err);
         }
 
         // Drempelwaarde iets verlaagd naar 0.35 voor zekerheid, pas aan indien nodig
@@ -569,7 +574,7 @@ async function findPoliceZone(db, input) {
             label: best.row.zone_name,
             value: best.row.arrondissement || null,
             matchType: 'vector',
-            score: best.score
+            score: best.score,
           });
         }
 
