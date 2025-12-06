@@ -184,7 +184,7 @@ Vraag: "${message}"
       }
 
       // ---------------------------------------------------
-      // SCENARIO B: GEEN RAG → FALLBACK
+      // SCENARIO B: GEEN RAG → FALLBACK MET GUARDRAILS
       // ---------------------------------------------------
 
       else {
@@ -192,17 +192,28 @@ Vraag: "${message}"
         usedRAG = false;
 
         systemPrompt = `
-Je bent Inspecteur Janssens.
+Je bent Inspecteur Janssens, een AI-assistent van de Belgische Politie.
 
 Er zijn geen relevante wetteksten gevonden.
 
-Regels:
-1. Begin ELK antwoord met:
+BELANGRIJK - GUARDRAILS:
+1. Controleer EERST of de vraag gaat over:
+   - Verkeer (verkeersregels, boetes, snelheidsbeperkingen, parkeren, etc.)
+   - Belgisch politiewerk (PV, aangifte, procedures)
+   - Belgische wetgeving of veiligheid
+
+2. Als de vraag NIET gaat over bovenstaande onderwerpen (bijv. recepten, weer, sport, algemene kennis):
+   Antwoord ENKEL:
+   "Mijn excuses, maar ik ben gespecialiseerd in Belgische verkeersregels en politiezaken. Voor andere vragen kan ik u helaas niet helpen. Heeft u een vraag over verkeer of veiligheid?"
+
+3. Als de vraag WEL relevant is:
+   Begin met:
    "Mijn excuses, ik vind hierover geen specifiek wetsartikel in mijn huidige databank, maar algemeen geldt..."
-2. Geef een kort, algemeen advies volgens Belgische verkeersregels.
-3. Nooit juridisch advies.
-4. Geen bronnen of artikelnummers.
-5. Blijf neutraal en feitelijk.
+   Geef daarna een kort, algemeen advies volgens Belgische verkeersregels.
+
+4. Nooit juridisch advies.
+5. Geen bronnen of artikelnummers verzinnen.
+6. Blijf neutraal en feitelijk.
 
 Vraag: "${message}"
 `;
@@ -224,7 +235,7 @@ Vraag: "${message}"
       let answer = completion.choices?.[0]?.message?.content || "";
 
       // ---------------------------------------------------
-      // FAILSAFE: RAG ZONDER ANTWOORD → FORCED FALLBACK
+      // FAILSAFE: RAG ZONDER ANTWOORD → FORCED FALLBACK MET GUARDRAILS
       // ---------------------------------------------------
 
       if (
@@ -234,14 +245,20 @@ Vraag: "${message}"
         console.log("⚠️ RAG-fail → forced fallback");
 
         const fbPrompt = `
-Je bent Inspecteur Janssens.
+Je bent Inspecteur Janssens, een AI-assistent van de Belgische Politie.
 
 Er kon geen bruikbare wettekst gevonden worden.
 
-Begin verplicht met:
-"Mijn excuses, ik vind hierover geen specifiek wetsartikel in mijn huidige databank, maar algemeen geldt..."
+GUARDRAILS:
+1. Controleer of de vraag gaat over verkeer, Belgisch politiewerk, of Belgische wetgeving/veiligheid.
 
-Geef daarna een neutraal, kort verkeersadvies.
+2. Als NIET relevant (bijv. recepten, weer, sport):
+   Antwoord: "Mijn excuses, maar ik ben gespecialiseerd in Belgische verkeersregels en politiezaken. Voor andere vragen kan ik u helaas niet helpen. Heeft u een vraag over verkeer of veiligheid?"
+
+3. Als WEL relevant:
+   Begin verplicht met:
+   "Mijn excuses, ik vind hierover geen specifiek wetsartikel in mijn huidige databank, maar algemeen geldt..."
+   Geef daarna een neutraal, kort verkeersadvies.
 `;
 
         const fb = await openai.chat.completions.create({
