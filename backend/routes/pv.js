@@ -637,7 +637,7 @@ async function extractInformation(userMessage, history) {
     VUL ZELF GEEN VELDEN IN DIE NIET EXPLICIET WORDEN VERMELD.
     
     Velden:
-    - name (Volledige naam, indien genoemd. BELANGRIJK: Extraheer NOOIT de naam uit een e-mailadres! Als het bericht alleen een e-mailadres bevat, geef null voor name.)
+    - name (Volledige naam. Als de LAATSTE vraag in de geschiedenis was "Met wie spreek ik?" en de gebruiker een naam geeft, extraheer die. BELANGRIJK: Extraheer NOOIT de naam uit een e-mailadres! Als het bericht alleen een e-mailadres bevat, geef null voor name.)
     - description (BELANGRIJK: Haal ENKEL de NIEUWE details uit het "LAATSTE BERICHT" die nog niet in de geschiedenis staan. Beschrijf wie, wat, waar, hoe, wapens, buit. Schrijf dit als een correcte Nederlandse zin. Herhaal GEEN feiten die al bekend zijn. Vermijd Engels.)
     - location (Locatie zo specifiek mogelijk. Los verwijzingen als "hier" of "daar" op m.b.v. geschiedenis Indien niet genoemd, geef null) 
     - city (Extracteer de stad uit de locatie indien mogelijk)
