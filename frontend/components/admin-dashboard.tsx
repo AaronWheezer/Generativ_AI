@@ -20,14 +20,20 @@ export function AdminDashboard() {
           id: r.id,
           name: r.name || "-",
           description: r.description || "",
-          municipality: r.location || "",
+          location: r.location || "",
+          municipality: r.city || r.municipality || "",
           datetime: r.datetime || new Date().toISOString(),
           zoneLabel: r.zoneLabel || "",
-          confirmed: (r.status || "").toLowerCase() === "closed" || (r.status || "").toLowerCase() === "bevestigd" || (r.status || "").toLowerCase() === "afgerond",
+          confirmed:
+            (r.status || "").toLowerCase() === "closed" ||
+            (r.status || "").toLowerCase() === "bevestigd" ||
+            (r.status || "").toLowerCase() === "afgerond",
           email: r.email || "",
           phone: r.phone || "",
           prioriteit: r.prioriteit || "MIDDEN",
           status: r.status || "open",
+          suspectKnown: Boolean(r.suspectKnown),
+          createdAt: r.created_at ? new Date(r.created_at) : new Date(),
         }))
         setRecords(mapped)
       } catch (e) {
@@ -54,7 +60,8 @@ export function AdminDashboard() {
           name: updatedPV.name,
           email: updatedPV.email,
           phone: updatedPV.phone,
-          location: updatedPV.municipality,
+          location: updatedPV.location,
+          city: updatedPV.municipality,
           datetime: updatedPV.datetime,
           description: updatedPV.description,
           prioriteit: updatedPV.prioriteit,

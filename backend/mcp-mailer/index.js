@@ -29,17 +29,26 @@ app.post('/mail-pv', async (req, res) => {
     try {
       const ollamaUrl =
         process.env.OLLAMA_URL || 'http://127.0.0.1:11434/v1/chat/completions';
-      const prompt = `Je bent een virtuele politieassistent. Stel een nette, formele e-mail op namens de politie, gericht aan de melder (${
-        pvData.name
-      }, e-mail: ${
-        pvData.email
-      }). Gebruik de volgende gegevens:\n${JSON.stringify(
-        pvData,
-        null,
-        2
-      )}\nDe e-mail moet persoonlijk, volledig en uitsluitend in het Nederlands zijn. Schrijf vanuit de politie, niet vanuit de melder. Bedank de melder voor zijn/haar melding en bevestig ontvangst van het proces-verbaal en zorg dat de doorgegeven details vermeld zijn. Onderteken de e-mail met "Vriendelijke groet, Politie Assistent, Politiezone ${
-        pvData.politiezone || 'Kortrijk'
-      }".`;
+      const prompt = `Je bent een Belgische politieassistent. Schrijf een formele bevestigingsmail in het NEDERLANDS (niet Duits, niet Engels).
+
+ONTVANGER: ${pvData.name} (${pvData.email})
+GEGEVENS PV:
+- Naam: ${pvData.name}
+- Locatie: ${pvData.location || 'Onbekend'}
+- Datum/tijd: ${pvData.date || 'Onbekend'} ${pvData.time || ''}
+- Beschrijving: ${pvData.description || 'Zie PV'}
+- Politiezone: ${pvData.zoneLabel || 'Onbekend'}
+
+SCHRIJF DE EMAIL IN HET NEDERLANDS. Structuur:
+1. Geachte heer/mevrouw [naam],
+2. Bevestig ontvangst van de aangifte
+3. Vat kort samen wat er gemeld is (locatie, datum, wat gebeurd is)
+4. Vermeld dat de aangifte in behandeling is
+5. Sluit af met: "Met vriendelijke groeten, Politie-assistent, Politiezone ${
+        pvData.zoneLabel || 'Onbekend'
+      }"
+
+VERBODEN: Duitse woorden zoals "Sehr geehrter", "vielen Dank", "Mit freundlichen Grüßen". ALLEEN NEDERLANDS.`;
       const ollamaRes = await axios.post(
         ollamaUrl,
         {
@@ -47,7 +56,8 @@ app.post('/mail-pv', async (req, res) => {
           messages: [
             {
               role: 'system',
-              content: 'Je bent een virtuele politieassistent.',
+              content:
+                'Je bent een Belgische politieassistent. Je schrijft ALTIJD in het Nederlands, NOOIT in het Duits of Engels.',
             },
             { role: 'user', content: prompt },
           ],
@@ -57,13 +67,19 @@ app.post('/mail-pv', async (req, res) => {
       );
       emailText =
         ollamaRes.data.choices?.[0]?.message?.content ||
-        `Hier is uw PV:\n${JSON.stringify(pvData, null, 2)}`;
+        `Geachte ${pvData.name},\n\nUw aangifte is ontvangen.\n\nMet vriendelijke groeten,\nPolitie`;
     } catch (aiErr) {
       console.warn(
         '⚠️ AI mailtekst genereren mislukt, val terug op standaard:',
         aiErr.message
       );
-      emailText = `Hier is uw PV:\n${JSON.stringify(pvData, null, 2)}`;
+      emailText = `Geachte ${
+        pvData.name
+      },\n\nUw aangifte is ontvangen voor een incident op ${
+        pvData.location || 'onbekende locatie'
+      } op ${
+        pvData.date || 'onbekende datum'
+      }.\n\nMet vriendelijke groeten,\nPolitie-assistent`;
     }
 
     const mailOptions = {
