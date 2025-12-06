@@ -159,7 +159,7 @@ async function generateFollowUpQuestion(
 
   // Format current state voor AI context
   const stateContext = `
-HUIGE INGEVULDE VELDEN:
+HUIDIGE INGEVULDE VELDEN:
 - Naam: ${currentState.name || '(nog niet ingevuld)'}
 - Beschrijving: ${currentState.description || '(nog niet ingevuld)'}
 - Locatie: ${currentState.location || '(nog niet ingevuld)'}
@@ -172,7 +172,7 @@ HUIGE INGEVULDE VELDEN:
     systemTask = `
     SITUATIE: We zitten in de beginfase van het verhoor. Je MOET doorvragen.
     VERBODEN: Het is verboden om "VOLDOENDE" te antwoorden.
-    FOCUSGEBIEDEN VOOR JE VRAAG (Kies er één die nog niet besproken is):
+    FOCUSGEBIEDEN VOOR JE VRAAG (Kies er één die nog niet besproken is) kijk naar de HUIDIGE INGEVULDE VELDEN en de BEKENDE DETAILS:
     1. DADERDETAILS: Specifieke kledij (merken, logo's, kleuren), schoenen, haarkleur, kapsel, accent, taal, geur.
     2. HANDELINGEN: Wat zeiden ze precies? Hoe benaderden ze het slachtoffer? Was er fysiek contact?
     3. OMGEVING: Waren er andere getuigen? Welke kant liepen ze op?
@@ -468,47 +468,111 @@ Output ALLEEN de nette samenvatting, geen JSON, geen tags.
   }
 }
 
+// Hulpfunctie voor Cosine Similarity (deze ontbrak mogelijk)
+function cosineSimilarity(vecA, vecB) {
+  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+  let dot = 0.0;
+  let normA = 0.0;
+  let normB = 0.0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// Zorg dat normalize ook beschikbaar is voor deze functie
+function normalize(str) {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9/\-\s]/g, '')
+    .trim();
+}
+
 async function findPoliceZone(db, input) {
   if (!input) return null;
+
+  // 1. Input normaliseren
   const parts = input.split(' ');
-  const searchTerms = [...parts, input];
+  // We zoeken op de losse woorden EN op de hele zin
+  const searchTerms = [...parts, input].filter(t => t.length > 2); // Filter korte woordjes weg
+
   return new Promise((resolve) => {
     db.all(
       'SELECT id, municipalities, zone_name, arrondissement, embedding FROM police_zones',
       [],
       async (err, rows) => {
-        if (err || !rows) return resolve(null);
+        if (err || !rows) {
+            console.error("DB Error of geen rijen:", err);
+            return resolve(null);
+        }
+
+        // --- STAP 1: Exacte (genormaliseerde) match ---
         for (const term of searchTerms) {
-          const target = normalize(term);
+          const target = normalize(term); // bv: "antwerpen"
+          
           for (const r of rows) {
             let munis = [];
             try {
               munis = JSON.parse(r.municipalities);
-            } catch {}
-            if (Array.isArray(munis) && munis.includes(target)) {
-              return resolve({
-                label: r.zone_name,
-                value: r.arrondissement || null,
-              });
+            } catch (e) { continue; }
+
+            if (Array.isArray(munis)) {
+              // FIX: Normaliseer ook de data uit de DB voordat je vergelijkt
+              const match = munis.some(m => normalize(m) === target);
+              
+              if (match) {
+                // Gevonden op naam!
+                return resolve({
+                  label: r.zone_name,
+                  value: r.arrondissement || null,
+                  matchType: 'text' // Debug info
+                });
+              }
             }
           }
         }
+
+        // --- STAP 2: Vector Search (Fallback) ---
+        // Alleen doen als text match faalt
         let best = null;
-        const qEmb = await embed(input);
-        for (const r of rows) {
-          let embArr = [];
-          try {
-            embArr = JSON.parse(r.embedding);
-          } catch {}
-          const score =
-            qEmb.length && embArr.length ? cosineSimilarity(qEmb, embArr) : 0;
-          if (!best || score > best.score) best = { score, row: r };
+        try {
+            const qEmb = await embed(input); // Zorg dat embed() beschikbaar is in deze scope!
+            
+            if (qEmb && qEmb.length > 0) {
+                for (const r of rows) {
+                    let embArr = [];
+                    try {
+                        embArr = JSON.parse(r.embedding);
+                    } catch { continue; }
+
+                    const score = (embArr.length === qEmb.length) 
+                        ? cosineSimilarity(qEmb, embArr) 
+                        : 0;
+
+                    if (!best || score > best.score) {
+                        best = { score, row: r };
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("Embedding search error:", err);
         }
-        if (best && best.score > 0.4)
+
+        // Drempelwaarde iets verlaagd naar 0.35 voor zekerheid, pas aan indien nodig
+        if (best && best.score > 0.55) {
           return resolve({
             label: best.row.zone_name,
             value: best.row.arrondissement || null,
+            matchType: 'vector',
+            score: best.score
           });
+        }
+
         resolve(null);
       }
     );
@@ -564,11 +628,12 @@ async function extractInformation(userMessage, history) {
     LAATSTE BERICHT VAN GEBRUIKER: "${userMessage}"
     
     TAAK: Analyseer het LAATSTE BERICHT en de GESCHIEDENIS en extraheer data naar JSON.
+    VUL ZELF GEEN VELDEN IN DIE NIET EXPLICIET WORDEN VERMELD.
     
     Velden:
     - name (Volledige naam, indien genoemd)
     - description (BELANGRIJK: Haal ENKEL de NIEUWE details uit het "LAATSTE BERICHT" die nog niet in de geschiedenis staan. Beschrijf wie, wat, waar, hoe, wapens, buit. Schrijf dit als een correcte Nederlandse zin. Herhaal GEEN feiten die al bekend zijn. Vermijd Engels.)
-    - location (Locatie zo specifiek mogelijk. Los verwijzingen als "hier" of "daar" op m.b.v. geschiedenis) 
+    - location (Locatie zo specifiek mogelijk. Los verwijzingen als "hier" of "daar" op m.b.v. geschiedenis Indien niet genoemd, geef null) 
     - city (Extracteer de stad uit de locatie indien mogelijk)
     - municipality (Enkel indien expliciet genoemd)
     - date (YYYY-MM-DD. Los termen als "gisteren" of "vandaag" op)

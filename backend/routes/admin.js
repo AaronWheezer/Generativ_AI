@@ -2,7 +2,7 @@ module.exports = function initAdmin(app, db) {
   // List all dossiers
   app.get('/api/admin/dossiers', (req, res) => {
     db.all(
-      'SELECT id, naam as name, email, telefoon as phone, locatie as location, datum as datetime, beschrijving as description, prioriteit, politie_zone as zoneLabel, status, created_at FROM dossiers ORDER BY created_at DESC',
+      'SELECT id, naam as name, email, telefoon as phone, locatie as location, stad as city, datum as datetime, beschrijving as description, prioriteit, politie_zone as zoneLabel, status, created_at FROM dossiers ORDER BY created_at DESC',
       [],
       (err, rows) => {
         if (err) return res.status(500).json({ error: 'DB error' });
@@ -19,6 +19,7 @@ module.exports = function initAdmin(app, db) {
       email,
       phone,
       location,
+      city,
       datetime,
       description,
       prioriteit,
@@ -26,12 +27,13 @@ module.exports = function initAdmin(app, db) {
       status,
     } = req.body || {};
     if (!id) return res.status(400).json({ error: 'invalid id' });
-    const sql = `UPDATE dossiers SET naam = ?, email = ?, telefoon = ?, locatie = ?, datum = ?, beschrijving = ?, prioriteit = ?, politie_zone = ?, status = ? WHERE id = ?`;
+    const sql = `UPDATE dossiers SET naam = ?, email = ?, telefoon = ?, locatie = ?, stad = ?, datum = ?, beschrijving = ?, prioriteit = ?, politie_zone = ?, status = ? WHERE id = ?`;
     const params = [
       name,
       email,
       phone,
       location,
+      city,
       datetime,
       description,
       prioriteit,
