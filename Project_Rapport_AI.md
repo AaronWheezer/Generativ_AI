@@ -35,7 +35,7 @@ Een **AI-chatbot** bouwen die:
 
 | Technologie                              | Gebruik                                  | Reden                                            |
 | ---------------------------------------- | ---------------------------------------- | ------------------------------------------------ |
-| **Ollama (LLM)**                         | Local AI model (Llama 3.1, Mistral Nemo) | Privacy, offline werking, geen kosten            |
+| **Ollama (LLM) / mistral-nemo**                         | Local AI model (Llama 3.1, Mistral Nemo) | Privacy, offline werking, geen kosten            |
 | **RAG (Retrieval-Augmented Generation)** | Vector search in wetteksten              | Verhoogt nauwkeurigheid, integreert domeinkennis |
 | **Vector Search (sqlite-vec)**           | Semantische zoekopdrachten               | Efficiënte similarity matching                   |
 | **MCP Server**                           | E-mail verzending via Brevo SMTP         | Asynchrone communicatie, reliable delivery       |
@@ -167,7 +167,7 @@ async function generateFollowUpQuestion(descriptionSoFar, history, currentState,
 
    ```
    HUIDIGE INGEVULDE VELDEN:
-   - Naam: Mike Oxlong
+   - Naam: Kenny Revier
    - Locatie: Howest Kortrijk
    - Datum: 2025-12-05
    - Tijd: 16:00
@@ -271,7 +271,7 @@ De overvaller droeg een skimask. [Vraag: Waar ging hij heen?]
 **Na:**
 
 ```
-Op 05 december 2025 om 16:00 meldde Mike Oxlong zich bij de
+Op 05 december 2025 om 16:00 meldde Kenny Revier zich bij de
 politie met betrekking tot een overval op Howest in Kortrijk.
 De melder verklaarde dat hij door een persoon werd bedreigd
 met een mes en zijn gsm werd gestolen. Deze persoon droeg een
@@ -289,7 +289,7 @@ skimask en Nike Tech schoenen.
 
 **Prompt Regels:**
 
-- Maximum 5-6 zinnen
+
 - Politie-terminologie
 - Vloeiende tekst (geen opsomming)
 - Behoud ALLE relevante feiten
@@ -322,16 +322,24 @@ Q: "Mag ik in een parkeerzone stoppen?"
 **Prompt Engineering:**
 
 ```
-Je bent Inspecteur Janssens, officiële AI-assistent.
+BELANGRIJK - GUARDRAILS:
+1. Controleer EERST of de vraag gaat over:
+   - Verkeer (verkeersregels, boetes, snelheidsbeperkingen, parkeren, etc.)
+   - Belgisch politiewerk (PV, aangifte, procedures)
+   - Belgische wetgeving of veiligheid
 
-REGELS:
-- Geef ENKEL antwoorden uit de context
-- Geen bronnen verzinnen
-- Geen artikelnummers fabriceren
-- Geen interpretaties
-- Antwoord letterlijk uit de wettekst
+2. Als de vraag NIET gaat over bovenstaande onderwerpen (bijv. recepten, weer, sport, algemene kennis):
+   Antwoord ENKEL:
+   "Mijn excuses, maar ik ben gespecialiseerd in Belgische verkeersregels en politiezaken. Voor andere vragen kan ik u helaas niet helpen. Heeft u een vraag over verkeer of veiligheid?"
 
-Indien niet in context: "Ik kan dit niet terugvinden in mijn databank."
+3. Als de vraag WEL relevant is:
+   Begin met:
+   "Mijn excuses, ik vind hierover geen specifiek wetsartikel in mijn huidige databank, maar algemeen geldt..."
+   Geef daarna een kort, algemeen advies volgens Belgische verkeersregels.
+
+4. Nooit juridisch advies.
+5. Geen bronnen of artikelnummers verzinnen.
+6. Blijf neutraal en feitelijk.
 ```
 
 **Twee Modi:**
@@ -588,9 +596,9 @@ const history = formatHistoryForPrompt(history.slice(-6));
 - **User Prompt:** Actuele vraag + context
 
 **Temperature Tuning:**
-
+1
 - Extraction: `0.0` (deterministic)
-- Follow-up vragen: `0.3` (creative but focused)
+- Follow-up vragen: `0.55` 
 - Email: `0.2` (formeel, beperkte creativiteit)
 
 ### 4.3 Guardrails & Safety
@@ -810,7 +818,6 @@ Hij stal de gsm."
   - Verwijdert duplicaten
   - Schrijft in derde persoon
   - Gebruikt politie-terminologie
-  - Max 5-6 zinnen
 - Flag `descriptionCleaned` voorkomt herhaalde cleanup
 
 **Voor:**
@@ -824,7 +831,7 @@ Welke kant ging hij op?] [Antwoord: geen idee].
 **Na:**
 
 ```
-Op 05 december 2025 om 16:00 meldde Mike Oxlong zich bij de
+Op 05 december 2025 om 16:00 meldde Kenny Revier zich bij de
 politie met betrekking tot een overval op Howest in Kortrijk.
 De melder verklaarde dat hij door een persoon werd bedreigd met
 een mes en zijn gsm werd gestolen. Deze persoon droeg een skimask
@@ -900,7 +907,7 @@ Met vriendelijke groeten, Politie-assistent`;
 - LLM leest volledige PV-gegevens
 - Genereert formele, gepersonaliseerde e-mail
 - Integreert alle relevante details (locatie, datum, beschrijving)
-- Verzend via OLLAMA + Nodemailer
+- Verzend via OLLAMA + Nodemailer  (https://app-smtp.brevo.com/real-time)
 - Zie: `index.js` regel 15-80
 
 **Impact:** Professionele communicatie verhoogt vertrouwen burger
@@ -914,7 +921,7 @@ Met vriendelijke groeten, Politie-assistent`;
 - **RAG integratie:** Wetteksten als context
 - **Guardrails:** Off-topic blokkering
 - **Prompt engineering:** Zero-shot extraction met full state context
-- **History management:** Laatste 6-10 exchanges als context
+- **History management:** doorgeven van oudste statements
 - **Field Protection:** Voorkomt data corruptie
 - **Duplicate Prevention:** Tracking van gestelde vragen
 - Zie: `rag.js` + `pv.js`
@@ -936,19 +943,6 @@ Met vriendelijke groeten, Politie-assistent`;
 
 ## 8. EVALUATIE
 
-### Quantitatieve Metrics
-
-| Metrick                          | Waarde | Benchmark |
-| -------------------------------- | ------ | --------- |
-| **Completion Rate**              | 92%    | > 80% ✓   |
-| **False Positives (Guardrails)** | 2%     | < 5% ✓    |
-| **RAG Precision**                | 94%    | > 85% ✓   |
-| **E-mail Success Rate**          | 98%    | > 90% ✓   |
-| **Avg. Response Time**           | 1.1s   | < 2s ✓    |
-| **Zone Matching**                | 91%    | > 85% ✓   |
-| **Question Duplication Rate**    | 4%     | < 10% ✓   |
-| **Data Corruption Rate**         | 1%     | < 5% ✓    |
-| **Language Accuracy (NL)**       | 100%   | 100% ✓    |
 
 ### Kwalitatieve Evaluatie
 
@@ -964,11 +958,12 @@ Met vriendelijke groeten, Politie-assistent`;
 - ✅ AI summary cleanup voor professionele PV's
 - ✅ Robuuste "geen idee" detectie
 - ✅ Full state context awareness
+- ✅ Guardrails voor veiligheid
 
 **Verbeterpunten:**
 
-- ⚠️ Langzame first-response (model loading)
-- ⚠️ Soms nog dubbelzinnige zones (kost meer training data)
+- ⚠️ Langzame response
+- ⚠️ Soms nog dubbelzinnige zones
 - ⚠️ Geen real-time frontend monitoring
 - ⚠️ Limited error messages naar user
 
@@ -1035,7 +1030,7 @@ Raw: "De overvaller droeg skimask. [Vraag: Getuigen?]
       [Antwoord: nee]. Hij stal gsm. [Vraag: Richting?]
       [Antwoord: geen idee]."
 
-AI Summary: "Op 05 december 2025 om 16:00 meldde Mike Oxlong
+AI Summary: "Op 05 december 2025 om 16:00 meldde Kenny Revier
 zich bij de politie met betrekking tot een overval op Howest
 in Kortrijk. De melder verklaarde dat hij door een persoon
 werd bedreigd met een mes en zijn gsm werd gestolen. Deze
@@ -1066,7 +1061,7 @@ persoon droeg een skimask en Nike Tech schoenen."
 ```bash
 # Ollama
 OLLAMA_URL=http://127.0.0.1:11434
-CHAT_MODEL=llama3.1
+CHAT_MODEL=mistral-nemo
 EMBED_MODEL=bge-m3
 
 # Mail (Brevo)
@@ -1095,30 +1090,6 @@ MCP_MAILER_URL=http://127.0.0.1:4000/mail-pv
 - ✅ E-mail verzending live
 - ✅ Frontend functioneel
 
-### Deploy Checklist
-
-- [ ] Code review & testing
-- [ ] Security audit (SQL injection, XSS)
-- [ ] Performance tuning
-- [ ] Production database migration
-- [ ] Backup strategy
-- [ ] Monitoring setup
-- [ ] User acceptance testing
-
-### Toekomstige Features
-
-1. **Multi-language:** Ondersteuning Arabisch, Somalisch, Frans, etc.
-2. **Fine-tuning:** Politie-specifieke model training op echte PV's
-3. **Diffusion Models:** Document/diagram generatie voor rapporten
-4. **Analytics Dashboard:** Heatmaps, incident trends, zone statistics
-5. **Integration:** Koppeling politie COPIS-systeem voor centralisatie
-6. **Audio Input:** Spraak-naar-tekst van burgers (toegankelijkheid)
-7. **Verification Layer:** Tweepersoonscontrole PV's voor juridische validiteit
-8. **Mobile App:** Native iOS/Android app voor meldingen onderweg
-9. **Real-time Updates:** WebSocket voor live status updates admin panel
-10. **Advanced RAG:** Multi-document reasoning over wetboeken + jurisprudentie
-
----
 
 ## CONCLUSIE
 
@@ -1134,26 +1105,11 @@ Dit project demonstreert een **productie-gereed AI-systeem** dat geavanceerde te
 - **AI Summary Cleanup** voor professionele output
 - **Multi-Layer Language Enforcement** voor correcte taal
 
-**Belangrijkste Achievements:**
-
-- ✅ 92% completion rate (>80% target)
-- ✅ <5% duplicate questions (was 40%)
-- ✅ 100% Nederlandse emails (was 60% Duits)
-- ✅ 98% email success rate
-- ✅ 1% data corruption rate (was 30%)
-- ✅ Professionele PV's zonder handmatige cleanup
 
 Het systeem vermindert administratieve belasting aanzienlijk (geschat -70% tijd) en verhoogt de kwaliteit van aangiftes door consistentie en volledigheid. Met verdere optimisatie en integratie kan dit model uitgerold worden naar alle Belgische politiezones.
 
-**Geschatte Impact:**
-
-- **Tijdsbesparing:** 15-20 minuten per aangifte
-- **Kostenbesparing:** €50.000+ per jaar per middelgrote zone
-- **Kwaliteitsverbetering:** +85% volledigheid eerste aangifte
-- **Burgertevredenheid:** +40% (geschat op basis van professionele communicatie)
-
 ---
 
-**Document versie:** 2.0  
+**Document versie:** 5.0  
 **Datum:** 6 December 2025  
-**Status:** Compleet (met recente verbeteringen)
+**Status:** Compleet
