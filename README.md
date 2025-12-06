@@ -1,30 +1,48 @@
 # Project Generative AI - Aaron Vanmarcke & Egon Tondeur Galle
 
-voorlopige data wegcode:
+## Databronnen Wegcode
 - https://www.wegcode.be/nl/regelgeving/1975120109~hra8v386pu
 - https://www.gratisrijbewijsonline.be/theorie
-## installs: 
-npm install in 
-- backend/
-- frontend/
-- backend/mcp_server/
-  
 
-# installs backend:
-npm install pdf-parse sqlite3 cors express body-parser openai
-npm install --save axios
-ollama / install
-nomic-embed-text
+## Installatie
+
+### NPM Dependencies
+Voer `npm install` uit in de volgende mappen:
+- `backend/`
+- `frontend/`
+- `backend/mcp_server/`
+
+### Backend Dependencies
+```bash
+npm install pdf-parse sqlite3 cors express body-parser openai axios
+```
+
+### Ollama Modellen
+```bash
 ollama pull bge-m3
 ollama pull mistral-nemo
-# requirements:
-backend:
-    node .\server.js
-    node .\load_pdf.js -- is voor eenmalig pdf inladen -> embedding voor de database
-    node .\ingeest_police_zones.js  -- is voor eenmalig inladen politie zones
+ollama pull llama3.1
+```
 
+## Eenmalige Setup
 
-## opstarten : 
-npm run dev in frontend/Z
-npm run dev in backend/ 
+### Database Initialisatie
+```bash
+# PDF embeddings inladen
+node .\load_pdf.js
+
+# Politiezones inladen
+node .\ingest_police_zones.js
+```
+
+## Opstarten
+
+### Development Mode
+```bash
+# Backend (in backend/)
+npm run dev
+
+# Frontend (in frontend/)
+npm run dev
+``` 
 
