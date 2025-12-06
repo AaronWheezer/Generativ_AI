@@ -978,14 +978,6 @@ module.exports = function initPv(app, db) {
         const newValue = newInfo[key];
         const isNewValueVague = isVagueValue(newValue);
 
-        // EXTRA BESCHERMING: Overschrijf NOOIT de naam als deze al bestaat
-        if (key === 'name' && state.fields.name && newValue) {
-          console.log(
-            `⚠️ Skipping name update: name already exists (${state.fields.name})`
-          );
-          return;
-        }
-
         // Skip update als bestaande waarde beter is dan nieuwe
         if (hasExistingValue && isNewValueVague) {
           console.log(
