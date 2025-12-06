@@ -52,7 +52,7 @@ async function embed(text) {
     if (!text?.trim()) return null;
     try {
         const res = await axios.post(
-            "http://localhost:11434/api/embed",
+            "http://127.0.0.1:11434/api/embed",
             { model: "bge-m3", input: text },
             { headers: { "Content-Type": "application/json" } }
         );

@@ -8,7 +8,9 @@ const nodemailer = require('nodemailer');
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const CHAT_MODEL = process.env.CHAT_MODEL || 'llama3.1'; // Ensure this model supports JSON mode well
 const EMBED_MODEL = process.env.EMBED_MODEL || 'bge-m3';
-const MAX_DEEP_DIVE_QUESTIONS = Number(process.env.MAX_DEEP_DIVE_QUESTIONS || 5);
+const MAX_DEEP_DIVE_QUESTIONS = Number(
+  process.env.MAX_DEEP_DIVE_QUESTIONS || 5
+);
 const MIN_DEEP_DIVE_QUESTIONS = 2;
 const MIN_DESCRIPTION_WORDS = Number(process.env.MIN_DESCRIPTION_WORDS || 25);
 const MAX_HISTORY_LENGTH = 10; // Keep last 10 exchanges to save context window
@@ -112,40 +114,110 @@ async function embed(text) {
   }
 }
 
-async function generateFollowUpQuestion(descriptionSoFar, history, mustAsk = false) {
+async function generateFollowUpQuestion(
+  descriptionSoFar,
+  history,
+  currentState,
+  mustAsk = false
+) {
   if (!descriptionSoFar?.trim()) return null;
 
+  // Check voor "weet ik niet" antwoorden in recente geschiedenis
+  const recentMessages = history
+    .slice(-3)
+    .map((h) => h.content?.toLowerCase() || '');
+  const hasNoIdeaResponse = recentMessages.some(
+    (msg) =>
+      msg.includes('geen idee') ||
+      msg.includes('weet ik niet') ||
+      msg.includes('weet het niet') ||
+      msg.includes('niet gezien') ||
+      msg.includes('herinner') ||
+      msg.includes('herinneren')
+  );
+
+  // Als user recent "geen idee" zei EN we boven minimum zitten, stop met vragen
+  if (hasNoIdeaResponse && !mustAsk) {
+    return 'VOLDOENDE';
+  }
+
+  // Extract alle gestelde vragen uit de description om duplicaten te voorkomen
+  const askedQuestions = [];
+  const questionMatches = descriptionSoFar.matchAll(/\[Vraag: ([^\]]+)\]/g);
+  for (const match of questionMatches) {
+    askedQuestions.push(match[1].toLowerCase().trim());
+  }
+
+  // Splits bestaande description in zinnen voor deduplicatie en context
+  const knownDetails = descriptionSoFar
+    ? descriptionSoFar
+        .split(/[.!?]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
   const conversationContext = formatHistoryForPrompt(history.slice(-6));
 
+  // Format current state voor AI context
+  const stateContext = `
+HUIGE INGEVULDE VELDEN:
+- Naam: ${currentState.name || '(nog niet ingevuld)'}
+- Beschrijving: ${currentState.description || '(nog niet ingevuld)'}
+- Locatie: ${currentState.location || '(nog niet ingevuld)'}
+- Stad: ${currentState.city || '(nog niet ingevuld)'}
+- Datum: ${currentState.date || '(nog niet ingevuld)'}
+- Tijd: ${currentState.time || '(nog niet ingevuld)'}`;
+
   let systemTask = '';
-  
   if (mustAsk) {
-    // MODUS: FORCEREN
     systemTask = `
     SITUATIE: We zitten in de beginfase van het verhoor. Je MOET doorvragen.
     VERBODEN: Het is verboden om "VOLDOENDE" te antwoorden.
-    
     FOCUSGEBIEDEN VOOR JE VRAAG (Kies er één die nog niet besproken is):
     1. DADERDETAILS: Specifieke kledij (merken, logo's, kleuren), schoenen, haarkleur, kapsel, accent, taal, geur.
     2. HANDELINGEN: Wat zeiden ze precies? Hoe benaderden ze het slachtoffer? Was er fysiek contact?
     3. OMGEVING: Waren er andere getuigen? Welke kant liepen ze op?
     4. BUIT: Merk van telefoon? Kleur hoesje? Beschadigingen?
     
+    Vraag niet naar details die al in deze lijst staan:
+    ${
+      knownDetails.length
+        ? knownDetails.map((d) => `- ${d}`).join('\n')
+        : '- (geen)'
+    }
     Kies het meest relevante ontbrekende detail en stel daar ÉÉN gerichte vraag over.
     `;
   } else {
-    // MODUS: CONTROLEREN
     systemTask = `
     SITUATIE: Het verhoor loopt op zijn einde.
     TAAK: Beoordeel of het dossier compleet is voor een basis proces-verbaal.
     - Ontbreken er nog écht cruciale zaken (bv. vluchtrichting of wapens)? Stel dan nog een vraag.
     - Is het plaatje redelijk compleet? Antwoord dan: VOLDOENDE
+    Vraag niet naar details die al in deze lijst staan:
+    ${
+      knownDetails.length
+        ? knownDetails.map((d) => `- ${d}`).join('\n')
+        : '- (geen)'
+    }
     `;
   }
 
   const prompt = `
 Je bent een Vlaamse politie-rechercheur.
-Huidige dossier samenvatting: "${descriptionSoFar}"
+${stateContext}
+
+REEDS GESTELDE VRAGEN (Vraag deze NOOIT opnieuw):
+${
+  askedQuestions.length
+    ? askedQuestions.map((q) => `- ${q}`).join('\n')
+    : '- (geen)'
+}
+
+Huidige dossier samenvatting (bekende details):
+${
+  knownDetails.length
+    ? knownDetails.map((d) => `- ${d}`).join('\n')
+    : '- (geen)'
+}
 
 Recente conversatie:
 ${conversationContext}
@@ -209,22 +281,18 @@ function appendDescription(base, addition) {
   const cleanBase = base.trim();
   const cleanAdd = addition.trim();
 
-  // 1. Exacte duplicatie check
-  if (cleanBase.includes(cleanAdd)) return cleanBase;
-
-  // 2. Check of het einde van de base overlapt met het begin van de addition
-  // Dit voorkomt: "Ik liep op straat. op straat werd ik..."
-  const overlapWindow = 20; // Check laatste X karakters
-  const endOfBase = cleanBase.slice(-overlapWindow).toLowerCase();
-  
-  // Als de toevoeging begint met (ongeveer) hetzelfde als waar de base eindigt
-  if (cleanAdd.toLowerCase().startsWith(endOfBase)) {
-      return cleanBase + cleanAdd.slice(overlapWindow);
-  }
-
-  // 3. Standaard samenvoeging
-  const separator = /[.!?]$/.test(cleanBase) ? '' : '.';
-  return `${cleanBase}${separator} ${cleanAdd}`.trim();
+  // 1. Splits beide in zinnen en dedupliceer
+  const baseSentences = cleanBase
+    .split(/[.!?]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const addSentences = cleanAdd
+    .split(/[.!?]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const allSentences = [...baseSentences, ...addSentences];
+  const uniqueSentences = [...new Set(allSentences)];
+  return uniqueSentences.join('. ') + (cleanAdd.endsWith('.') ? '' : '.');
 }
 
 const DATE_KEYWORDS = [
@@ -353,6 +421,53 @@ function answerToSentence(lastQuestionKey, questionText, rawAnswer) {
   }
 }
 
+async function summarizeDescription(rawDescription, allFields) {
+  if (!rawDescription) return null;
+
+  const prompt = `
+Je bent een politie-administratief medewerker die een proces-verbaal finaliseert.
+
+RUWE GEGEVENS (bevat Q&A tags en duplicaten):
+${rawDescription}
+
+ALLE INGEVULDE VELDEN:
+- Naam: ${allFields.name || 'Onbekend'}
+- Locatie: ${allFields.location || 'Onbekend'}
+- Datum: ${allFields.date || 'Onbekend'}
+- Tijd: ${allFields.time || 'Onbekend'}
+- Email: ${allFields.email || 'Onbekend'}
+- Telefoon: ${allFields.phone || 'Onbekend'}
+
+TAAK: Herschrijf de ruwe gegevens tot een professionele, vloeiende Nederlandse samenvatting voor een proces-verbaal.
+
+REGELS:
+1. Verwijder alle [Vraag: ...] en [Antwoord: ...] tags
+2. Verwijder duplicaten en redundante zinnen
+3. Behoud ALLE relevante feiten (wie, wat, waar, wanneer, hoe)
+4. Schrijf in de derde persoon ("De melder verklaarde dat...")
+5. Gebruik correcte politie-terminologie
+6. Maak er een vloeiende tekst van (geen opsomming)
+7. Maximum 5-6 zinnen
+
+Output ALLEEN de nette samenvatting, geen JSON, geen tags.
+  `;
+
+  try {
+    const res = await axios.post(`${OLLAMA_URL}/api/chat`, {
+      model: CHAT_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      stream: false,
+      options: { temperature: 0.3 },
+    });
+
+    const summary = res.data.message?.content?.trim();
+    return summary || rawDescription;
+  } catch (e) {
+    console.error('Summary error:', e.message);
+    return rawDescription;
+  }
+}
+
 async function findPoliceZone(db, input) {
   if (!input) return null;
   const parts = input.split(' ');
@@ -436,7 +551,7 @@ async function extractInformation(userMessage, history) {
   // Format history as a context string for the LLM
   const historyText = formatHistoryForPrompt(history);
 
-const prompt = `
+  const prompt = `
     Je bent een Data Verwerker voor de Belgische Politie.
     
     CONTEXT:
@@ -462,11 +577,13 @@ const prompt = `
     - phone (Telefoonnummer Indien niet genoemd, geef null))
     - suspectKnown (boolean)
 
-    Regels:
+    KRITIEKE REGELS:
     1. Extraheer ALLEEN wat expliciet wordt vermeld of duidelijk wordt geïmpliceerd.
     2. Hallucineer GEEN datums of tijden.
-    3. Output uitsluitend JSON.
-    4. ALLES moet in het NEDERLANDS. Geen Engelse samenvattingen.
+    3. Als de gebruiker "geen idee", "weet ik niet", of "niet gezien" zegt: geef null voor dat veld.
+    4. NOOIT vage waarden zoals "onbekende locatie" of "geen specifieke locatie" - gebruik null.
+    5. Output uitsluitend JSON.
+    6. ALLES moet in het NEDERLANDS. Geen Engelse samenvattingen.
   `;
 
   try {
@@ -487,7 +604,7 @@ const prompt = `
 
 // Stap 2: Reasoning (Vaste Vragen)
 async function determineNextAction(fields, sessionState) {
- sessionState.deepDiveCount = sessionState.deepDiveCount || 0;
+  sessionState.deepDiveCount = sessionState.deepDiveCount || 0;
 
   // 1. Basis checks
   if (!fields.name) return buildQuestionResponse('name', sessionState);
@@ -503,69 +620,88 @@ async function determineNextAction(fields, sessionState) {
   const isAboveMax = sessionState.deepDiveCount >= MAX_DEEP_DIVE_QUESTIONS;
 
   if (isAboveMax) {
-      fields.deepDiveDone = true;
+    fields.deepDiveDone = true;
   } else {
-      // 3. GENEREREN (Met Retry Logic ingebouwd in de functie)
-      let aiQuestion = await generateFollowUpQuestion(
-          fields.description,
-          sessionState.history,
-          isBelowMin // TRUE = Forceer vraag, FALSE = Mag stoppen
-      );
+    // 3. GENEREREN (Met Retry Logic ingebouwd in de functie)
+    let aiQuestion = await generateFollowUpQuestion(
+      fields.description,
+      sessionState.history,
+      fields, // Pass volledige state
+      isBelowMin // TRUE = Forceer vraag, FALSE = Mag stoppen
+    );
 
-      // 4. AFHANDELING
-      if (aiQuestion && aiQuestion !== 'VOLDOENDE') {
-          // We hebben een dynamische vraag
-          sessionState.pendingFollowUp = true;
-          sessionState.lastQuestion = 'auto_follow_up';
-          sessionState.lastQuestionText = aiQuestion;
-          sessionState.expectingLocation = false;
+    // 4. AFHANDELING
+    if (aiQuestion && aiQuestion !== 'VOLDOENDE') {
+      // We hebben een dynamische vraag
+      sessionState.pendingFollowUp = true;
+      sessionState.lastQuestion = 'auto_follow_up';
+      sessionState.lastQuestionText = aiQuestion;
+      sessionState.expectingLocation = false;
 
-          return {
-              reply: aiQuestion,
-              isComplete: false,
-              priority: 'MIDDEN',
-          };
-      } else if (aiQuestion === 'VOLDOENDE') {
-          // AI zegt voldoende én we zitten boven minimum (anders had de retry loop het gevangen)
-          fields.deepDiveDone = true;
-      } else {
-          // EXTREME FAILSAFE: AI crasht of timet out na retries.
-          // In plaats van een fallback vraag, doen we alsof de deepdive klaar is 
-          // (beter dan crashen of engels praten).
-          // OF: Je kan hier recursief nog eens proberen.
-          console.log("AI failed completely. Skipping deep dive step.");
-          fields.deepDiveDone = true; 
-      }
+      return {
+        reply: aiQuestion,
+        isComplete: false,
+        priority: 'MIDDEN',
+      };
+    } else if (aiQuestion === 'VOLDOENDE') {
+      // AI zegt voldoende én we zitten boven minimum (anders had de retry loop het gevangen)
+      fields.deepDiveDone = true;
+    } else {
+      // EXTREME FAILSAFE: AI crasht of timet out na retries.
+      // In plaats van een fallback vraag, doen we alsof de deepdive klaar is
+      // (beter dan crashen of engels praten).
+      // OF: Je kan hier recursief nog eens proberen.
+      console.log('AI failed completely. Skipping deep dive step.');
+      fields.deepDiveDone = true;
+    }
   }
 
   // 5. STANDAARD VELDEN (Pas als deep dive echt klaar is)
-  // Safety check: Is deepDiveDone per ongeluk true terwijl we onder min zitten? 
+  // Safety check: Is deepDiveDone per ongeluk true terwijl we onder min zitten?
   // Dit kan theoretisch alleen bij netwerk errors.
-  // In dat geval dwingen we de loop open door deepDiveDone weer op false te zetten 
+  // In dat geval dwingen we de loop open door deepDiveDone weer op false te zetten
   // en een simpele prompt te sturen naar de gebruiker.
-  if (fields.deepDiveDone && sessionState.deepDiveCount < MIN_DEEP_DIVE_QUESTIONS) {
-     // Dit gebeurt normaal nooit met de nieuwe generator, maar voor 100% robuustheid:
-     console.log("Critial: Too few questions despite logic. Forcing generic continue.");
-     // We laten de AI een "vertel meer" vraag genereren zonder context
-     const emergencyPrompt = "De gebruiker heeft een korte verklaring gegeven. Vraag beleefd naar meer details.";
-     // ... (aanroep naar AI) ...
-     // Maar laten we aannemen dat de retry-loop hierboven zijn werk doet.
+  if (
+    fields.deepDiveDone &&
+    sessionState.deepDiveCount < MIN_DEEP_DIVE_QUESTIONS
+  ) {
+    // Dit gebeurt normaal nooit met de nieuwe generator, maar voor 100% robuustheid:
+    console.log(
+      'Critial: Too few questions despite logic. Forcing generic continue.'
+    );
+    // We laten de AI een "vertel meer" vraag genereren zonder context
+    const emergencyPrompt =
+      'De gebruiker heeft een korte verklaring gegeven. Vraag beleefd naar meer details.';
+    // ... (aanroep naar AI) ...
+    // Maar laten we aannemen dat de retry-loop hierboven zijn werk doet.
   }
 
   // Als we hier zijn, gaan we naar locatie/tijd/email
   fields.deepDiveDone = true;
   // Standaard velden aflopen
   if (!fields.location) return buildQuestionResponse('location', sessionState);
-  if (fields.location && !fields.zoneLabel) return buildQuestionResponse('municipality_fix', sessionState);
+  if (fields.location && !fields.zoneLabel)
+    return buildQuestionResponse('municipality_fix', sessionState);
   if (!fields.date) return buildQuestionResponse('datetime', sessionState);
   if (!fields.email) return buildQuestionResponse('email', sessionState);
   if (!fields.phone) return buildQuestionResponse('phone', sessionState);
 
-  // Alles compleet
+  // Alles compleet - cleanup description met AI
   sessionState.lastQuestion = null;
   sessionState.expectingLocation = false;
-  
-  const fullDateTime = [fields.date, fields.time].filter(Boolean).join(' ') || 'Onbekend';
+
+  // Laat AI de description samenvatten tot nette tekst (ALLEEN als nog niet gedaan)
+  if (!fields.descriptionCleaned) {
+    const cleanedDescription = await summarizeDescription(
+      fields.description,
+      fields
+    );
+    fields.description = cleanedDescription; // Update met nette versie
+    fields.descriptionCleaned = true; // Mark als schoongemaakt
+  }
+
+  const fullDateTime =
+    [fields.date, fields.time].filter(Boolean).join(' ') || 'Onbekend';
   const zoneLabel = fields.zoneLabel || 'Onbekend';
   const cityLabel = fields.city || fields.municipality || 'Onbekend';
 
@@ -636,6 +772,7 @@ module.exports = function initPv(app, db) {
             city: null,
             confirmed: false,
             deepDiveDone: false,
+            descriptionCleaned: false,
           },
         };
       }
@@ -660,9 +797,17 @@ module.exports = function initPv(app, db) {
         state.history.push({ role: 'user', content: incomingMessage });
 
         if (
-          ['ja', 'ok', 'yes', 'goed', 'klopt', 'correct'].some((w) =>
-            lower.includes(w)
-          )
+          [
+            'ja',
+            'ok',
+            'yes',
+            'goed',
+            'klopt',
+            'correct',
+            'perfect',
+            'akkoord',
+            'prima',
+          ].some((w) => lower.includes(w))
         ) {
           const finalDateTime = [state.fields.date, state.fields.time]
             .filter(Boolean)
@@ -748,8 +893,28 @@ module.exports = function initPv(app, db) {
       const messageHasDate = hasDateIndicator(incomingMessage);
       const messageHasTime = hasTimeIndicator(incomingMessage);
 
+      // FIELD PROTECTION: Prevent overwriting with vague/null values
+      const isVagueValue = (val) => {
+        if (!val) return true;
+        const vague = ['onbekend', 'geen', 'niet', 'nvt', 'unknown', 'none'];
+        return vague.some((v) => String(val).toLowerCase().includes(v));
+      };
+
       // Update fields
       Object.keys(newInfo).forEach((key) => {
+        const hasExistingValue =
+          state.fields[key] && !isVagueValue(state.fields[key]);
+        const newValue = newInfo[key];
+        const isNewValueVague = isVagueValue(newValue);
+
+        // Skip update als bestaande waarde beter is dan nieuwe
+        if (hasExistingValue && isNewValueVague) {
+          console.log(
+            `⚠️ Skipping update for ${key}: existing value is better than vague new value`
+          );
+          return;
+        }
+
         if (
           newInfo[key] !== null &&
           newInfo[key] !== undefined &&
@@ -757,8 +922,8 @@ module.exports = function initPv(app, db) {
         ) {
           if (key === 'description') {
             // Intelligent append
-           if (!state.pendingFollowUp) {
-               state.fields.description = appendDescription(
+            if (!state.pendingFollowUp) {
+              state.fields.description = appendDescription(
                 state.fields.description,
                 newInfo[key]
               );
@@ -798,16 +963,25 @@ module.exports = function initPv(app, db) {
       // Handle description appending from questions
       const trimmedMessage = incomingMessage.trim();
       if (state.pendingFollowUp && trimmedMessage) {
+        // Voeg Q&A toe aan description voor volledige context
+        const qaEntry = `[Vraag: ${state.lastQuestionText}] [Antwoord: ${trimmedMessage}]`;
+        state.fields.description = appendDescription(
+          state.fields.description,
+          qaEntry
+        );
+
         if (!newInfo.description) {
           const contextual = answerToSentence(
             state.lastQuestion,
             state.lastQuestionText,
             trimmedMessage
           );
-          state.fields.description = appendDescription(
-            state.fields.description,
-            contextual || trimmedMessage
-          );
+          if (contextual) {
+            state.fields.description = appendDescription(
+              state.fields.description,
+              contextual
+            );
+          }
         }
         state.pendingFollowUp = false;
         state.deepDiveCount = (state.deepDiveCount || 0) + 1;
