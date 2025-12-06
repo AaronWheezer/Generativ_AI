@@ -289,7 +289,6 @@ skimask en Nike Tech schoenen.
 
 **Prompt Regels:**
 
-
 - Politie-terminologie
 - Vloeiende tekst (geen opsomming)
 - Behoud ALLE relevante feiten
@@ -943,7 +942,6 @@ Met vriendelijke groeten, Politie-assistent`;
 
 ## 8. EVALUATIE
 
-
 ### Kwalitatieve Evaluatie
 
 **Sterken:**
@@ -1039,9 +1037,9 @@ persoon droeg een skimask en Nike Tech schoenen."
 
 ---
 
-## 9. TECHNISCHE REQUIREMENTS
+## 9. DEPLOYMENT & REQUIREMENTS
 
-### Software
+### Software Requirements
 
 - **Node.js** v18+
 - **Ollama** (local LLM server)
@@ -1077,11 +1075,7 @@ PORT=3000
 MCP_MAILER_URL=http://127.0.0.1:4000/mail-pv
 ```
 
----
-
-## 10. DEPLOYMENT & TOEKOMST
-
-### Huidge Status
+### Huidige Status
 
 - ✅ Backend functioneel
 - ✅ Chatbot werkt
