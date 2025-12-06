@@ -172,7 +172,7 @@ HUIDIGE INGEVULDE VELDEN:
     systemTask = `
     SITUATIE: We zitten in de beginfase van het verhoor. Je MOET doorvragen.
     VERBODEN: Het is verboden om "VOLDOENDE" te antwoorden.
-    FOCUSGEBIEDEN VOOR JE VRAAG (Kies er één die nog niet besproken is) kijk naar de HUIDIGE INGEVULDE VELDEN en de BEKENDE DETAILS:
+    FOCUSGEBIEDEN VOOR JE VRAAG (Kies er één die nog niet besproken is en zorg dat er geen spellings fouten in staan!!!!) kijk naar de HUIDIGE INGEVULDE VELDEN en de BEKENDE DETAILS:
     1. DADERDETAILS: Specifieke kledij (merken, logo's, kleuren), schoenen, haarkleur, kapsel, accent, taal, geur.
     2. HANDELINGEN: Wat zeiden ze precies? Hoe benaderden ze het slachtoffer? Was er fysiek contact?
     3. OMGEVING: Waren er andere getuigen? Welke kant liepen ze op?
@@ -275,8 +275,9 @@ function normalize(str) {
 }
 
 function appendDescription(base, addition) {
-  if (!addition) return base || null;
-  if (!base) return addition.trim();
+  if (!addition || typeof addition !== 'string') return base || null;
+  if (!base || typeof base !== 'string')
+    return typeof addition === 'string' ? addition.trim() : null;
 
   const cleanBase = base.trim();
   const cleanAdd = addition.trim();
@@ -354,14 +355,14 @@ const DETAIL_KEYWORDS = [
 const NEGATIVE_WORDS = ['nee', 'neen', 'niet', 'no', 'geen', 'zonder'];
 
 function hasDateIndicator(text) {
-  if (!text) return false;
+  if (!text || typeof text !== 'string') return false;
   const lower = text.toLowerCase();
   if (DATE_KEYWORDS.some((kw) => lower.includes(kw))) return true;
   return /\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/.test(lower);
 }
 
 function hasTimeIndicator(text) {
-  if (!text) return false;
+  if (!text || typeof text !== 'string') return false;
   const lower = text.toLowerCase();
   if (TIME_KEYWORDS.some((kw) => lower.includes(kw))) return true;
   return (
@@ -371,7 +372,7 @@ function hasTimeIndicator(text) {
 }
 
 function needsMoreDetail(description, deepDiveCount = 0) {
-  if (!description) return true;
+  if (!description || typeof description !== 'string') return true;
   const words = description.split(/\s+/).filter(Boolean);
   const sentences = description
     .split(/[.!?]+/)
@@ -389,13 +390,13 @@ function needsMoreDetail(description, deepDiveCount = 0) {
 }
 
 function isNegativeResponse(text) {
-  if (!text) return false;
+  if (!text || typeof text !== 'string') return false;
   const lower = text.toLowerCase();
   return NEGATIVE_WORDS.some((word) => lower.includes(word));
 }
 
 function answerToSentence(lastQuestionKey, questionText, rawAnswer) {
-  if (!rawAnswer) return null;
+  if (!rawAnswer || typeof rawAnswer !== 'string') return null;
   const trimmed = rawAnswer.trim();
   if (!lastQuestionKey) return trimmed;
   // Handle specific contextual answers based on the question asking logic
@@ -422,7 +423,7 @@ function answerToSentence(lastQuestionKey, questionText, rawAnswer) {
 }
 
 async function summarizeDescription(rawDescription, allFields) {
-  if (!rawDescription) return null;
+  if (!rawDescription || typeof rawDescription !== 'string') return null;
 
   const prompt = `
 Je bent een politie-administratief medewerker die een proces-verbaal finaliseert.
@@ -494,7 +495,7 @@ function normalize(str) {
 }
 
 async function findPoliceZone(db, input) {
-  if (!input) return null;
+  if (!input || typeof input !== 'string') return null;
 
   // 1. Input normaliseren
   const parts = input.split(' ');
@@ -590,7 +591,7 @@ async function sendPVEmail(dossier) {
 }
 
 function extractCityFromLocation(location) {
-  if (!location) return null;
+  if (!location || typeof location !== 'string') return null;
   const splitter = location
     .split(/[,-]/)
     .map((part) => part.trim())
@@ -636,7 +637,7 @@ async function extractInformation(userMessage, history) {
     VUL ZELF GEEN VELDEN IN DIE NIET EXPLICIET WORDEN VERMELD.
     
     Velden:
-    - name (Volledige naam, indien genoemd)
+    - name (Volledige naam, indien genoemd. BELANGRIJK: Extraheer NOOIT de naam uit een e-mailadres! Als het bericht alleen een e-mailadres bevat, geef null voor name.)
     - description (BELANGRIJK: Haal ENKEL de NIEUWE details uit het "LAATSTE BERICHT" die nog niet in de geschiedenis staan. Beschrijf wie, wat, waar, hoe, wapens, buit. Schrijf dit als een correcte Nederlandse zin. Herhaal GEEN feiten die al bekend zijn. Vermijd Engels.)
     - location (Locatie zo specifiek mogelijk. Los verwijzingen als "hier" of "daar" op m.b.v. geschiedenis Indien niet genoemd, geef null) 
     - city (Extracteer de stad uit de locatie indien mogelijk)
@@ -783,7 +784,7 @@ async function determineNextAction(fields, sessionState) {
 }
 
 function determinePriority(desc) {
-  if (!desc) return 'MIDDEN';
+  if (!desc || typeof desc !== 'string') return 'MIDDEN';
   const d = desc.toLowerCase();
   if (
     d.includes('wapen') ||
@@ -977,6 +978,14 @@ module.exports = function initPv(app, db) {
         const newValue = newInfo[key];
         const isNewValueVague = isVagueValue(newValue);
 
+        // EXTRA BESCHERMING: Overschrijf NOOIT de naam als deze al bestaat
+        if (key === 'name' && state.fields.name && newValue) {
+          console.log(
+            `⚠️ Skipping name update: name already exists (${state.fields.name})`
+          );
+          return;
+        }
+
         // Skip update als bestaande waarde beter is dan nieuwe
         if (hasExistingValue && isNewValueVague) {
           console.log(
@@ -999,7 +1008,12 @@ module.exports = function initPv(app, db) {
               );
             }
           } else if (key === 'location') {
-            const incomingLocation = newInfo[key];
+            let incomingLocation = newInfo[key];
+            // Sanitize: ensure location is a string
+            if (incomingLocation && typeof incomingLocation !== 'string') {
+              incomingLocation =
+                incomingLocation.city || incomingLocation.municipality || null;
+            }
             if (
               !state.fields.location ||
               (incomingLocation &&
@@ -1016,14 +1030,27 @@ module.exports = function initPv(app, db) {
               else if (!state.fields.city) state.fields.city = incomingLocation;
             }
           } else if (key === 'municipality') {
-            state.fields.municipality = newInfo[key];
-            state.fields.city = newInfo[key];
+            let municipality = newInfo[key];
+            // Sanitize: ensure municipality is a string
+            if (municipality && typeof municipality !== 'string') {
+              municipality =
+                municipality.municipality || municipality.city || null;
+            }
+            state.fields.municipality = municipality;
+            state.fields.city = municipality;
           } else if (key === 'date') {
             if (messageHasDate && newInfo[key])
               state.fields.date = newInfo[key];
           } else if (key === 'time') {
             if (messageHasTime && newInfo[key])
               state.fields.time = newInfo[key];
+          } else if (key === 'city') {
+            let city = newInfo[key];
+            // Sanitize: ensure city is a string
+            if (city && typeof city !== 'string') {
+              city = city.city || city.municipality || null;
+            }
+            state.fields[key] = city;
           } else {
             state.fields[key] = newInfo[key];
           }
@@ -1067,9 +1094,13 @@ module.exports = function initPv(app, db) {
       console.log('📝 Updated State:', state.fields);
 
       if (!state.fields.zoneLabel) {
-        const searchTerm =
+        let searchTerm =
           state.fields.city || newInfo.municipality || state.fields.location;
-        if (searchTerm) {
+        // Sanitize: ensure searchTerm is a string
+        if (searchTerm && typeof searchTerm !== 'string') {
+          searchTerm = searchTerm.city || searchTerm.municipality || null;
+        }
+        if (searchTerm && typeof searchTerm === 'string') {
           const zone = await findPoliceZone(db, searchTerm);
           if (zone) state.fields.zoneLabel = zone.label;
         }
