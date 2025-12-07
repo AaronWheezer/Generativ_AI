@@ -1,9 +1,20 @@
-// MCP mailer endpoint configuratie
-const MCP_MAILER_URL =
-  process.env.MCP_MAILER_URL || 'http://127.0.0.1:4000/mail-pv';
-const axios = require('axios');
-const nodemailer = require('nodemailer');
+// --- IMPORTS (Alles moet ESM zijn voor MCP SDK) ---
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import path from "path";
+import { fileURLToPath } from "url";
+import axios from "axios"; // Vervang require('axios')
+// import { v4 as uuidv4 } from 'uuid'; // Alleen nodig als je uuid elders gebruikt
 
+// --- PAD CONFIGURATIE ---
+// Dit bepaalt de map waar PV.js staat (backend/routes)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// We gaan éen map omhoog (naar backend) en dan naar mcp-mailer
+const MCP_MAILER_PATH = path.join(__dirname, '..', 'mcp-mailer', 'index.js');
+
+console.log("📍 MCP Mailer Pad:", MCP_MAILER_PATH); // Check dit in je console bij opstarten!
 // --- CONFIGURATIE ---
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const CHAT_MODEL = process.env.CHAT_MODEL || 'mistral-nemo'; // Ensure this model supports JSON mode well
@@ -265,14 +276,6 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-function normalize(str) {
-  return String(str || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9/\-\s]/g, '')
-    .trim();
-}
 
 function appendDescription(base, addition) {
   if (!addition || typeof addition !== 'string') return base || null;
@@ -470,19 +473,19 @@ Output ALLEEN de nette samenvatting, geen JSON, geen tags.
 }
 
 // Hulpfunctie voor Cosine Similarity (deze ontbrak mogelijk)
-function cosineSimilarity(vecA, vecB) {
-  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-  let dot = 0.0;
-  let normA = 0.0;
-  let normB = 0.0;
-  for (let i = 0; i < vecA.length; i++) {
-    dot += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
-    normB += vecB[i] * vecB[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
+// function cosineSimilarity(vecA, vecB) {
+//   if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+//   let dot = 0.0;
+//   let normA = 0.0;
+//   let normB = 0.0;
+//   for (let i = 0; i < vecA.length; i++) {
+//     dot += vecA[i] * vecB[i];
+//     normA += vecA[i] * vecA[i];
+//     normB += vecB[i] * vecB[i];
+//   }
+//   if (normA === 0 || normB === 0) return 0;
+//   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+// }
 
 // Zorg dat normalize ook beschikbaar is voor deze functie
 function normalize(str) {
@@ -585,9 +588,61 @@ async function findPoliceZone(db, input) {
   });
 }
 
+// MCP Mailer via Stdio
+// MCP Mailer via Stdio (SDK Versie)
 async function sendPVEmail(dossier) {
-  console.log(`📧 E-mail wordt verstuurd naar: ${dossier.email}`);
-  return { success: true };
+  console.log("🚀 MCP Client: Verbinding maken...");
+
+  // 1. Setup Transport
+  // We starten 'node' met het berekende pad naar index.js
+  const transport = new StdioClientTransport({
+    command: "node", 
+    args: [MCP_MAILER_PATH], 
+  });
+
+  // 2. Maak de Client
+  const client = new Client(
+    { name: "pv-backend-client", version: "1.0.0" },
+    { capabilities: {} }
+  );
+
+  try {
+    // 3. Verbinden
+    await client.connect(transport);
+
+    // 4. Roep de Tool aan
+    const result = await client.callTool({
+      name: "send_pv_email",
+      arguments: {
+        email: dossier.email,
+        pvData: {
+          name: dossier.name || dossier.naam, // Zorg dat dit veld matcht met je DB object!
+          location: dossier.location || dossier.locatie,
+          date: dossier.date || dossier.datum,
+          time: dossier.time || dossier.tijd,
+          description: dossier.description || dossier.beschrijving,
+          zoneLabel: dossier.zoneLabel || dossier.politie_zone,
+        },
+      },
+    });
+
+    // 5. Verbinding netjes sluiten
+    await transport.close();
+
+    // Check op fouten vanuit de tool zelf
+    if (result.isError) {
+       console.error("❌ MCP meldt fout:", result.content[0]?.text);
+       return { success: false };
+    }
+
+    console.log("✅ MCP Response:", result.content[0]?.text);
+    return { success: true, info: result };
+
+  } catch (error) {
+    console.error("❌ MCP Client Crash:", error);
+    try { await transport.close(); } catch(e) {} 
+    return { success: false, error: error.message };
+  }
 }
 
 function extractCityFromLocation(location) {
@@ -810,7 +865,7 @@ function buildQuestionResponse(key, sessionState) {
 // In-memory state
 const sessionState = {};
 
-module.exports = function initPv(app, db) {
+export default function initPv(app, db) {
   app.post('/api/pv/chat', async (req, res) => {
     try {
       const { sessionId, message } = req.body;
@@ -909,21 +964,12 @@ module.exports = function initPv(app, db) {
                   mode: 'report',
                 });
               }
-              await sendPVEmail(state.fields);
-              // MCP mailer-server aanroepen om PV te mailen naar de opsteller
-              try {
-                await axios.post(MCP_MAILER_URL, {
-                  email: state.fields.email,
-                  pvData: state.fields,
-                });
-                console.log(
-                  `✅ PV gemaild naar ${state.fields.email} via MCP mailer-server.`
-                );
-              } catch (err) {
-                console.error(
-                  '❌ Fout bij mailen via MCP mailer-server:',
-                  err.message
-                );
+              // Verstuur PV via MCP mailer-server
+              const mailResult = await sendPVEmail(state.fields);
+              if (mailResult.success) {
+                console.log(`✅ PV gemaild naar ${state.fields.email} via MCP mailer-server.`);
+              } else {
+                console.error('❌ Fout bij mailen via MCP mailer-server:', mailResult.info);
               }
               delete sessionState[sessionId];
               return res.json({

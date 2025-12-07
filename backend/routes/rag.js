@@ -1,7 +1,7 @@
-const OpenAI = require("openai");
-const axios = require("axios");
-const fs = require("node:fs");
-const pdfParse = require("pdf-parse");
+import OpenAI from "openai";
+import axios from "axios";
+import fs from "node:fs";
+import pdfParse from "pdf-parse";
 
 // ---------------------------------------------------
 // CONFIG
@@ -129,10 +129,10 @@ async function vectorSearch(db, queryText) {
 }
 
 // ---------------------------------------------------
-// MAIN MODULE
+// MAIN MODULE (EXPORT DEFAULT)
 // ---------------------------------------------------
 
-module.exports = function initRag(app, db) {
+export default function initRag(app, db) {
 
   // =======================================================
   // CHAT: INSPECTEUR JANSSENS (STRICT – ANTI-HALLUCINATIE)

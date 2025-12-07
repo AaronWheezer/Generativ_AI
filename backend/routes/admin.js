@@ -1,4 +1,4 @@
-module.exports = function initAdmin(app, db) {
+export default function initAdmin(app, db) {
   // List all dossiers
   app.get('/api/admin/dossiers', (req, res) => {
     db.all(
@@ -26,7 +26,9 @@ module.exports = function initAdmin(app, db) {
       zoneLabel,
       status,
     } = req.body || {};
+
     if (!id) return res.status(400).json({ error: 'invalid id' });
+
     const sql = `UPDATE dossiers SET naam = ?, email = ?, telefoon = ?, locatie = ?, stad = ?, datum = ?, beschrijving = ?, prioriteit = ?, politie_zone = ?, status = ? WHERE id = ?`;
     const params = [
       name,
@@ -41,6 +43,7 @@ module.exports = function initAdmin(app, db) {
       status,
       id,
     ];
+
     db.run(sql, params, function (err) {
       if (err) return res.status(500).json({ error: 'DB error' });
       res.json({ updated: this.changes > 0 });
@@ -51,6 +54,7 @@ module.exports = function initAdmin(app, db) {
   app.delete('/api/admin/dossiers/:id', (req, res) => {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'invalid id' });
+    
     db.run('DELETE FROM dossiers WHERE id = ?', [id], function (err) {
       if (err) return res.status(500).json({ error: 'DB error' });
       res.json({ deleted: this.changes > 0 });
@@ -61,6 +65,7 @@ module.exports = function initAdmin(app, db) {
   app.put('/api/admin/dossiers/:id/complete', (req, res) => {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'invalid id' });
+    
     db.run(
       'UPDATE dossiers SET status = ? WHERE id = ?',
       ['afgerond', id],
@@ -70,4 +75,4 @@ module.exports = function initAdmin(app, db) {
       }
     );
   });
-};
+}
